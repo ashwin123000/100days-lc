@@ -1,0 +1,98 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    match /users/{userId} {
+      allow create: if isOwner(userId)
+        && request.resource.data.keys().hasOnly([
+          'uid', 'fullName', 'email', 'role', 'createdAt', 'updatedAt', 'isActive'
+        ])
+        && request.resource.data.keys().hasAll([
+          'uid', 'fullName', 'email', 'role', 'createdAt', 'updatedAt', 'isActive'
+        ])
+        && request.resource.data.uid == userId
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() > 0
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'learner'
+        && request.resource.data.isActive == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow read: if isOwner(userId);
+      allow update: if isOwner(userId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['fullName', 'email', 'updatedAt'])
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+
+      match /userNotes/{problemId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && request.resource.data.keys().hasOnly([
+            'userId', 'problemId', 'content', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.keys().hasAll([
+            'userId', 'problemId', 'content', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.userId == userId
+          && request.resource.data.problemId == problemId
+          && request.resource.data.content is string
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if isOwner(userId)
+          && request.resource.data.userId == userId
+          && request.resource.data.problemId == problemId
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['content', 'updatedAt'])
+          && request.resource.data.content is string
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if isOwner(userId);
+      }
+
+      match /bookmarks/{problemId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && request.resource.data.keys().hasOnly(['userId', 'problemId', 'createdAt'])
+          && request.resource.data.keys().hasAll(['userId', 'problemId', 'createdAt'])
+          && request.resource.data.userId == userId
+          && request.resource.data.problemId == problemId
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    match /problems/{problemId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.isPublished == true);
+      allow write: if isAdmin();
+    }
+
+    match /dailyPotd/{potdId} {
+      allow read: if isAdmin() || (signedIn() && potdId == 'active');
+      allow write: if isAdmin();
+    }
+
+    match /stats/{statId} {
+      allow read: if isAdmin() && statId == 'registeredLearners';
+      allow write: if false;
+    }
+
+    match /{collectionName}/{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

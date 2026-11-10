@@ -12,12 +12,15 @@ function formatBytes(bytes) {
 function AdminPotdDialog({ potd, onPrepare, onPublish, onClose }) {
   const [title, setTitle] = useState(potd?.title ?? '')
   const [url, setUrl] = useState(potd?.leetcodeUrl ?? potd?.original_url ?? '')
+  const [challengeDay, setChallengeDay] = useState(potd?.challengeDay ?? '')
   const [solution, setSolution] = useState(potd?.solution ?? '')
   const [notes, setNotes] = useState(potd?.adminNotes ?? potd?.admin_notes ?? '')
   const [files, setFiles] = useState([])
   const [preparedProblem, setPreparedProblem] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [published, setPublished] = useState(false)
+  const publishInFlight = useRef(false)
   const filesRef = useRef(files)
 
   useEffect(() => {
@@ -59,11 +62,15 @@ function AdminPotdDialog({ potd, onPrepare, onPublish, onClose }) {
     const cleanUrl = url.trim()
     if (!cleanTitle) return setError('Enter a problem title.')
     if (!isValidLeetCodeProblemUrl(cleanUrl)) return setError('Enter a valid LeetCode problem URL.')
+    const day = Number(challengeDay)
+    if (!Number.isInteger(day) || day < 1 || day > 100) {
+      return setError('Choose a challenge day from 1 through 100.')
+    }
     setBusy(true)
     setError('')
     try {
       const candidate = await onPrepare(cleanTitle, cleanUrl)
-      setPreparedProblem(candidate)
+      setPreparedProblem({ ...candidate, challengeDay: day })
     } catch (prepareError) {
       setError(prepareError.message)
     } finally {
@@ -72,15 +79,18 @@ function AdminPotdDialog({ potd, onPrepare, onPublish, onClose }) {
   }
 
   const publish = async () => {
+    if (publishInFlight.current) return
+    publishInFlight.current = true
     setBusy(true)
     setError('')
     try {
-      await onPublish({ title: title.trim(), url: url.trim(), solution, notes })
-      onClose()
+      await onPublish({ title: title.trim(), url: url.trim(), solution, notes, challengeDay: preparedProblem.challengeDay })
+      setPublished(true)
     } catch (publishError) {
       setError(publishError.message)
       setPreparedProblem(null)
     } finally {
+      publishInFlight.current = false
       setBusy(false)
     }
   }
@@ -98,14 +108,21 @@ function AdminPotdDialog({ potd, onPrepare, onPublish, onClose }) {
           <button className="dialog-close" type="button" onClick={onClose} aria-label="Close dialog" disabled={busy}><X size={19} /></button>
         </div>
 
-        {preparedProblem ? (
+        {published ? (
+          <div className="potd-confirm" role="status">
+            <p className="dialog-body">The question was saved and assigned to Day {challengeDay}.</p>
+            <button className="primary-button dialog-submit" type="button" onClick={onClose}>Done</button>
+          </div>
+        ) : preparedProblem ? (
           <div className="potd-confirm">
             <p className="dialog-body">Verified against the Hugging Face problem dataset. Review the matching record before publishing.</p>
             <div className="potd-verified-card">
+              <span>Day {preparedProblem.challengeDay}</span>
               <span>#{preparedProblem.problem_id} · {preparedProblem.difficulty ?? 'Difficulty not provided'}</span>
               <strong>{preparedProblem.title}</strong>
               <code>{preparedProblem.slug}</code>
             </div>
+            <p className="dialog-body">This publishes the same question for every learner. Each learner&apos;s completion remains private to their account.</p>
             {error && <p className="dialog-error" role="alert">{error}</p>}
             <div className="dialog-button-row">
               <button className="secondary-button" type="button" disabled={busy} onClick={() => setPreparedProblem(null)}>
@@ -125,6 +142,20 @@ function AdminPotdDialog({ potd, onPrepare, onPublish, onClose }) {
             <label>
               LeetCode Problem Link
               <input disabled={busy} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="Paste LeetCode problem link" inputMode="url" required />
+            </label>
+            <label>
+              Challenge Day (1–100)
+              <input
+                disabled={busy}
+                value={challengeDay}
+                onChange={(event) => setChallengeDay(event.target.value)}
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                placeholder="43"
+                required
+              />
             </label>
             <label>
               Solution

@@ -19,6 +19,8 @@ function ProblemTable({
   onToggleBookmark,
   onCycleStatus,
   totalCount = problems.length,
+  emptyTitle,
+  emptyDescription,
 }) {
   const shouldReduceMotion = useReducedMotion()
 
@@ -43,9 +45,12 @@ function ProblemTable({
             <button
               className={`problem-status-pill problem-status-${problem.status.toLowerCase().replaceAll(' ', '-')}`}
               type="button"
+              disabled={problem.challengeVerified}
               onClick={() => onCycleStatus(problem)}
-              aria-label={`Status ${problem.status} for ${problem.title}. Change status`}
-              title="Click to change problem status"
+              aria-label={problem.challengeVerified
+                ? `${problem.title} is verified complete on LeetCode`
+                : `Status ${problem.status} for ${problem.title}. Change status`}
+              title={problem.challengeVerified ? 'Verified from the connected LeetCode account' : 'Click to change problem status'}
             >
               {problem.status === 'Solved' ? <Check size={14} /> : <Circle size={11} />}
               <span>{problem.status}</span>
@@ -113,8 +118,8 @@ function ProblemTable({
       {problems.length === 0 && (
         <div className="dashboard-empty-state">
           <FileText size={22} />
-          <h2>{totalCount ? 'No problems match these filters' : 'No published problems yet'}</h2>
-          <p>{totalCount ? 'Try changing the search or filters.' : 'Problems appear here after an admin publishes a POTD.'}</p>
+          <h2>{emptyTitle ?? (totalCount ? 'No problems match these filters' : 'No published problems yet')}</h2>
+          <p>{emptyDescription ?? (totalCount ? 'Try changing the search or filters.' : 'Problems appear here after an admin publishes a POTD.')}</p>
         </div>
       )}
     </div>

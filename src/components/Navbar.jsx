@@ -5,6 +5,7 @@ import logo from '../assets/mlsc-logo-transparent.png'
 
 const links = [
   { label: 'Home', href: '#home' },
+  { label: 'PROBLEMS', action: 'start-solving' },
   { label: 'About', href: '#about' },
   { label: 'Leaderboard', comingSoon: true },
   { label: 'Profile', comingSoon: true },
@@ -46,12 +47,19 @@ function NavigationItem({ link, onClick, mobile = false }) {
   )
 }
 
-function Navbar({ onNavigate, user, onLogout }) {
+function Navbar({ onNavigate, user, isAdmin, onLogout }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const shouldReduceMotion = useReducedMotion()
-  const visibleLinks = user
-    ? [...links.filter((link) => link.page !== 'login'), { label: 'Log out', action: 'logout' }]
+  const availableLinks = user && !isAdmin
+    ? links.map((link) => link.label === 'Profile'
+      ? { ...link, comingSoon: false, page: 'profile' }
+      : link.label === 'Leaderboard'
+        ? { ...link, comingSoon: false, page: 'leaderboard' }
+        : link)
     : links
+  const visibleLinks = user
+    ? [...availableLinks.filter((link) => link.page !== 'login'), { label: 'Log out', action: 'logout' }]
+    : availableLinks
 
   const handleNavigate = (link) => {
     setIsMenuOpen(false)

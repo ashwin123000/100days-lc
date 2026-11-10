@@ -4,6 +4,20 @@ import { motion, useReducedMotion } from 'motion/react'
 import ProblemTable from '../components/ProblemTable.jsx'
 import PotdFeature from './PotdFeature.jsx'
 
+// Learner library reset marker. Older Firestore records stay intact and become
+// visible again only when republished, which updates their existing updatedAt.
+const PRACTICE_LIBRARY_RESET_AT = Date.parse('2026-11-10T12:15:25Z')
+
+function wasPublishedForCurrentSet(problem) {
+  const updatedAt = problem?.updatedAt
+  const timestamp = typeof updatedAt?.toMillis === 'function'
+    ? updatedAt.toMillis()
+    : typeof updatedAt === 'string' || updatedAt instanceof Date
+      ? new Date(updatedAt).getTime()
+      : 0
+  return Number.isFinite(timestamp) && timestamp >= PRACTICE_LIBRARY_RESET_AT
+}
+
 function ProblemExplorer({
   problems,
   potd,
@@ -20,10 +34,12 @@ function ProblemExplorer({
   const [solvedFilter, setSolvedFilter] = useState('All problems')
   const [sort, setSort] = useState('number-asc')
   const shouldReduceMotion = useReducedMotion()
+  const currentSetProblems = useMemo(() => problems.filter(wasPublishedForCurrentSet), [problems])
+  const currentSetPotd = wasPublishedForCurrentSet(potd) ? potd : null
 
   const visibleProblems = useMemo(() => {
     const query = search.trim().toLowerCase()
-    return problems
+    return currentSetProblems
       .filter((problem) => {
         const matchesSearch =
           !query ||
@@ -45,9 +61,9 @@ function ProblemExplorer({
         if (sort === 'acceptance-desc') return second.acceptance - first.acceptance
         return first.id - second.id
       })
-  }, [difficulty, problems, search, solvedFilter, sort])
+  }, [currentSetProblems, difficulty, search, solvedFilter, sort])
 
-  const solvedCount = problems.filter((problem) => problem.status === 'Solved').length
+  const solvedCount = currentSetProblems.filter((problem) => problem.status === 'Solved').length
 
   return (
     <motion.section
@@ -63,12 +79,12 @@ function ProblemExplorer({
           Challenge paths
         </button>
         <div className="problem-summary">
-          <span><strong>{problems.length}</strong> problems</span>
+          <span><strong>{currentSetProblems.length}</strong> problems</span>
           <span><strong>{solvedCount}</strong> solved</span>
         </div>
       </div>
 
-      <PotdFeature potd={potd} onOpen={onOpenPotd} />
+      <PotdFeature potd={currentSetPotd} onOpen={onOpenPotd} />
 
       <div className="problem-heading">
         <div>
@@ -125,15 +141,17 @@ function ProblemExplorer({
       ) : (
         <ProblemTable
           problems={visibleProblems}
-          totalCount={problems.length}
+          totalCount={currentSetProblems.length}
           onAction={onAction}
           onOpenProblem={onOpenProblem}
           onToggleBookmark={onToggleBookmark}
           onCycleStatus={onCycleStatus}
+          emptyTitle="No new problems published yet"
+          emptyDescription="New questions will appear here after an admin publishes them. Older question records and learner data remain saved."
         />
       )}
       <p className="problem-results-count">
-        Showing <strong>{visibleProblems.length}</strong> of {problems.length} problems
+        Showing <strong>{visibleProblems.length}</strong> of {currentSetProblems.length} problems
       </p>
     </motion.section>
   )

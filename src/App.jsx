@@ -12,6 +12,8 @@ import AdminDashboard from './sections/AdminDashboard.jsx'
 import LoginPage from './sections/LoginPage.jsx'
 import AuthPage from './sections/AuthPage.jsx'
 import ProblemWorkspace from './sections/ProblemWorkspace.jsx'
+import LeetCodeProfile from './sections/LeetCodeProfile.jsx'
+import Leaderboard from './sections/Leaderboard.jsx'
 import {
   saveUserNote,
   setProblemBookmarked,
@@ -21,11 +23,18 @@ import {
   subscribeToUserBookmarks,
   subscribeToUserNotes,
 } from './services/firebaseData.js'
-import { fetchLearnerCount, preparePotd as preparePotdRequest, publishPotd as publishPotdRequest } from './services/api.js'
+import {
+  assignChallengeDay,
+  fetchLearnerCount,
+  initializeChallenge,
+  preparePotd as preparePotdRequest,
+  publishPotd as publishPotdRequest,
+  withFirebaseToken,
+} from './services/api.js'
 import { canonicalToListProblem, canonicalToWorkspaceProblem } from './utils/problemData.js'
 
-const routeNames = new Set(['home', 'platform', 'login', 'auth', 'admin', 'problems', 'daily', 'workspace'])
-const learnerRoutes = new Set(['platform', 'problems', 'daily', 'workspace'])
+const routeNames = new Set(['home', 'platform', 'login', 'auth', 'admin', 'problems', 'daily', 'workspace', 'profile', 'leaderboard'])
+const learnerRoutes = new Set(['platform', 'problems', 'daily', 'workspace', 'profile', 'leaderboard'])
 
 function routeFromLocation() {
   const [name, ...parts] = window.location.hash.slice(1).split('/')
@@ -53,12 +62,22 @@ function AppContent() {
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set())
   const [userNotes, setUserNotes] = useState(new Map())
   const [statuses, setStatuses] = useState({})
+  const [verifiedChallengeSlugs, setVerifiedChallengeSlugs] = useState(new Set())
+  const statusOwner = useRef(auth.user?.uid ?? null)
   const [learnerCount, setLearnerCount] = useState(null)
   const [learnerCountError, setLearnerCountError] = useState('')
   const [activeAction, setActiveAction] = useState(null)
   const [potdDialogProblem, setPotdDialogProblem] = useState(null)
   const [potdDialogOpen, setPotdDialogOpen] = useState(false)
   const pendingNavTarget = useRef(null)
+
+  useEffect(() => {
+    const uid = auth.user?.uid ?? null
+    if (statusOwner.current === uid) return
+    statusOwner.current = uid
+    setStatuses({})
+    setVerifiedChallengeSlugs(new Set())
+  }, [auth.user?.uid])
 
   const navigate = useCallback((page, problemId = null, replace = false, authMode = 'learner') => {
     const suffix = page === 'workspace' && problemId != null
@@ -142,6 +161,7 @@ function AppContent() {
       setBookmarkedIds(new Set())
       setUserNotes(new Map())
       setStatuses({})
+      setVerifiedChallengeSlugs(new Set())
       setWorkspaceDiscussion({})
       setProblemsLoaded(false)
       return undefined
@@ -214,6 +234,10 @@ function AppContent() {
   }, [auth.isAdmin, auth.user, route.page])
 
   const navigateFromNavbar = (link) => {
+    if (link.action === 'start-solving') {
+      navigate(auth.user ? 'platform' : 'login')
+      return
+    }
     if (link.page) {
       navigate(link.page)
       return
@@ -230,14 +254,16 @@ function AppContent() {
   const problems = useMemo(() => rawProblems.map((record) => {
     const problem = canonicalToListProblem(record)
     const canonicalId = problem.canonicalId
+    const challengeVerified = verifiedChallengeSlugs.has(canonicalId)
     return {
       ...problem,
       bookmarked: bookmarkedIds.has(canonicalId),
       notes: userNotes.get(canonicalId)?.content ?? '',
-      status: statuses[canonicalId] ?? 'Not started',
+      challengeVerified,
+      status: challengeVerified ? 'Solved' : statuses[canonicalId] ?? 'Not started',
       discussion: workspaceDiscussion[canonicalId] ?? [],
     }
-  }), [bookmarkedIds, rawProblems, statuses, userNotes, workspaceDiscussion])
+  }), [bookmarkedIds, rawProblems, statuses, userNotes, verifiedChallengeSlugs, workspaceDiscussion])
 
   const workspaceId = (problem) => problem?.problemId ?? problem?.canonicalId ?? problem?.slug
   const openWorkspace = useCallback((problem, tab = 'solution') => {
@@ -253,6 +279,29 @@ function AppContent() {
     setWorkspaceProblem(canonicalToWorkspaceProblem(problem))
     navigate('workspace', id)
   }, [navigate])
+
+  const markVerifiedChallengeProblemsSolved = useCallback((questions) => {
+    const verifiedSlugs = new Set(questions.map((question) => question.slug).filter(Boolean))
+    if (!verifiedSlugs.size) return
+    setVerifiedChallengeSlugs((current) => new Set([...current, ...verifiedSlugs]))
+    setStatuses((current) => {
+      const next = { ...current }
+      for (const slug of verifiedSlugs) next[slug] = 'Solved'
+      return next
+    })
+  }, [])
+
+  const openChallengeQuestion = useCallback((question) => {
+    const problem = rawProblems.find((record) =>
+      (record.slug ?? record.problemId) === question.slug
+      || record.problemId === question.slug,
+    )
+    if (problem) {
+      openWorkspace(problem)
+      return
+    }
+    if (question.leetcodeUrl) window.open(question.leetcodeUrl, '_blank', 'noopener,noreferrer')
+  }, [openWorkspace, rawProblems])
 
   useEffect(() => {
     if (route.page !== 'workspace' || !route.problemId || !problemsLoaded) return
@@ -294,7 +343,7 @@ function AppContent() {
 
   const cycleStatus = (problem) => {
     const id = workspaceId(problem)
-    if (!id) return
+    if (!id || verifiedChallengeSlugs.has(id)) return
     const statusesForProblem = ['Not started', 'In progress', 'Solved']
     const currentStatus = statuses[id] ?? 'Not started'
     setStatuses((current) => ({
@@ -312,13 +361,24 @@ function AppContent() {
   }
 
   const preparePotd = async (title, url) => {
-    const token = await auth.user.getIdToken()
-    return preparePotdRequest(title, url, token)
+    return withFirebaseToken(auth.user, (token) => preparePotdRequest(title, url, token))
   }
 
-  const publishPotd = async ({ title, url, solution, notes }) => {
-    const token = await auth.user.getIdToken()
-    return publishPotdRequest(title, url, solution, notes, token)
+  const publishPotd = async ({ title, url, solution, notes, challengeDay }) => {
+    const publishedProblem = await withFirebaseToken(auth.user, async (token) => {
+      await initializeChallenge(token)
+      return publishPotdRequest(title, url, solution, notes, token)
+    })
+    const problemSlug = publishedProblem?.slug ?? publishedProblem?.problemId
+    if (!problemSlug) {
+      throw new Error('The problem was published, but its slug was missing, so the challenge day could not be assigned.')
+    }
+    try {
+      await withFirebaseToken(auth.user, (token) => assignChallengeDay(challengeDay, problemSlug, token))
+    } catch (error) {
+      throw new Error(`The problem was published, but Day ${challengeDay} could not be assigned: ${error.message}`)
+    }
+    return publishedProblem
   }
 
   const resourceKey = workspaceProblem?.canonical_id
@@ -365,7 +425,7 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-midnight text-white">
-      <Navbar onNavigate={navigateFromNavbar} user={auth.user} onLogout={startLogout} />
+      <Navbar onNavigate={navigateFromNavbar} user={auth.user} isAdmin={auth.isAdmin} onLogout={startLogout} />
       {dataError && (learnerRoutes.has(route.page) || route.page === 'admin') && (
         <div className="api-notice" role="status">{dataError}</div>
       )}
@@ -441,6 +501,22 @@ function AppContent() {
             onResourceChange={updateWorkspaceResource}
             onBack={() => navigateBack('problems')}
             onRetry={retryWorkspace}
+          />
+        )}
+            {route.page === 'profile' && (
+          <LeetCodeProfile
+            key={auth.user?.uid}
+            user={auth.user}
+            linkedUsername={auth.profile?.leetcodeUsername ?? ''}
+            onVerifiedProblems={markVerifiedChallengeProblemsSolved}
+            onOpenQuestion={openChallengeQuestion}
+            onBack={() => navigateBack('platform')}
+          />
+        )}
+            {route.page === 'leaderboard' && (
+          <Leaderboard
+            user={auth.user}
+            onBack={() => navigateBack('platform')}
           />
         )}
           </>

@@ -21,7 +21,6 @@ function AdminDashboard({
     () => problems.filter((problem) => problem.title.toLowerCase().includes(search.trim().toLowerCase()) || String(problem.id).includes(search.trim())),
     [problems, search],
   )
-
   return (
     <motion.section
       className="admin-page page-shell"

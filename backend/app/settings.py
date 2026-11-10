@@ -10,6 +10,7 @@ class Settings:
     cors_origins: tuple[str, ...] = (
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://100days-mlsc.vercel.app",
     )
     semantic_min_score: float = 0.72
     semantic_min_margin: float = 0.04
@@ -18,7 +19,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         origins = os.getenv(
             "CORS_ORIGINS",
-            "http://localhost:5173,http://127.0.0.1:5173",
+            "http://localhost:5173,http://127.0.0.1:5173,https://100days-mlsc.vercel.app",
         )
         return cls(
             dataset_name=os.getenv(

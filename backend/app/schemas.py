@@ -1,11 +1,48 @@
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProblemLookupRequest(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     leetcode_url: str = Field(min_length=1, max_length=2048)
+
+
+class LeetCodeConnectRequest(BaseModel):
+    username: str = Field(
+        min_length=1,
+        max_length=25,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def trim_username(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class ChallengeDayAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    problem_slug: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+        alias="problemSlug",
+    )
+
+
+class ChallengeCompletionReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["pending"]
+
+
+class ChallengeCompletionReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    decision: Literal["verified", "rejected"]
+    review_note: str | None = Field(default=None, max_length=2000, alias="reviewNote")
 
 
 class ProblemRecord(BaseModel):

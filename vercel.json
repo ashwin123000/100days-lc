@@ -1,8 +1,8 @@
-{
+﻿{
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://YOUR-RENDER-SERVICE.onrender.com/api/:path*"
+      "destination": "https://mlsc-100days-lc.onrender.com/api/:path*"
     }
   ]
 }

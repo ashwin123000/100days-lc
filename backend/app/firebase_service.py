@@ -32,13 +32,8 @@ def firebase_app():
     try:
         app = firebase_admin.get_app()
     except ValueError:
-        credential_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         try:
-            credential = (
-                credentials.Certificate(credential_path)
-                if credential_path
-                else credentials.ApplicationDefault()
-            )
+            credential = credentials.ApplicationDefault()
             app = firebase_admin.initialize_app(
                 credential,
                 {"projectId": project_id},

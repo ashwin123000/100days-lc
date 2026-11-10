@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # MLSC — 100 Days of LeetCode
 
 A responsive MLSC challenge app built with React, Vite, Tailwind CSS, Motion,
@@ -118,3 +119,6 @@ python -m pytest backend/tests -q
 
 Firebase Auth, Firestore rules, Cloud Functions, and live project connectivity
 must be verified after configuring and deploying a real Firebase project.
+=======
+# 100days-lc
+>>>>>>> 1a8459c06b62df443272fce0c1a39c60e68d7e56

@@ -21,13 +21,13 @@ function Hero({ onStartSolving }) {
         </motion.div>
 
         <motion.p className="eyebrow" {...entrance(0.12)}>
-          MICROSOFT LEARN STUDENT CHAPTER <span aria-hidden="true">/</span> THE CODING CHALLENGE
+          MICROSOFT LEARN STUDENTS&apos; CLUB <span aria-hidden="true">/</span> THE CODING CHALLENGE
         </motion.p>
 
         <motion.h1 id="hero-title" {...entrance(0.2)}>
           Microsoft Learn
           <br />
-          <span>Student Chapter</span>
+          <span>Students&apos; Club</span>
         </motion.h1>
 
         <motion.p className="hero-subtitle" {...entrance(0.28)}>

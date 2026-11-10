@@ -84,7 +84,7 @@ function Navbar({ onNavigate, user, isAdmin, onLogout }) {
           <img className="brand-logo" src={logo} alt="Microsoft Learn Student Ambassador badge" />
           <span className="brand-name">
             <span>Microsoft Learn</span>
-            <span>Student Chapter</span>
+            <span>Students&apos; Club</span>
           </span>
         </a>
 

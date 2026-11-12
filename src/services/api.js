@@ -16,7 +16,15 @@ async function requestJson(path, options = {}, idToken = '') {
       await new Promise((resolve) => window.setTimeout(resolve, 250))
       response = await request()
     }
-  } catch {
+  } catch (error) {
+    if (idToken) {
+      void reportClientError(idToken, {
+        operation: 'api_network_error',
+        endpoint: path.split('?')[0],
+        message: error instanceof Error ? error.message : 'The API request could not be reached.',
+        stackTrace: error instanceof Error ? error.stack ?? '' : '',
+      })
+    }
     throw new Error(
       'Could not reach the API service. Check the connection and try again.',
     )
@@ -57,6 +65,32 @@ async function requestJson(path, options = {}, idToken = '') {
     throw new Error('The problem data service returned an invalid response.')
   }
   return body
+}
+
+export async function reportClientError(idToken, payload) {
+  if (!idToken) return
+  const safePayload = {
+    ...payload,
+    operation: String(payload.operation ?? 'client_error').slice(0, 120),
+    endpoint: String(payload.endpoint ?? '/').slice(0, 300),
+    message: String(payload.message ?? 'Unknown client error').slice(0, 2000),
+    stackTrace: String(payload.stackTrace ?? '').slice(0, 12000),
+  }
+  try {
+    const response = await fetch('/api/client-errors', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify(safePayload),
+    })
+    if (!response.ok) {
+      console.warn('Client error report was rejected', response.status)
+    }
+  } catch (error) {
+    console.warn('Client error report could not reach the API', error)
+  }
 }
 
 export async function withFirebaseToken(user, request) {
@@ -119,6 +153,26 @@ export function initializeChallenge(idToken) {
 export function fetchLearnerCount(idToken) {
   return requestJson('/api/admin/learners/count', {}, idToken)
     .then((response) => response.count)
+}
+
+export function fetchSystemLogs(idToken, params = {}) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') query.set(key, value)
+  }
+  const queryString = query.toString()
+  const suffix = queryString ? `?${queryString}` : ''
+  return requestJson(`/api/admin/system-logs${suffix}`, {}, idToken)
+}
+
+export function fetchSystemLog(idToken, logId) {
+  return requestJson(`/api/admin/system-logs/${encodeURIComponent(logId)}`, {}, idToken)
+}
+
+export function resolveSystemLog(idToken, logId) {
+  return requestJson(`/api/admin/system-logs/${encodeURIComponent(logId)}/resolve`, {
+    method: 'PATCH',
+  }, idToken)
 }
 
 export function fetchLeaderboard(idToken) {

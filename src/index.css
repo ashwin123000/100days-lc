@@ -3584,3 +3584,259 @@ button {
     justify-content: center;
   }
 }
+
+.system-logs-page {
+  padding-bottom: 56px;
+}
+
+.logs-refresh-button,
+.system-logs-filters > button,
+.system-log-pagination button,
+.system-log-detail-heading button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid rgb(24 200 179 / 25%);
+  border-radius: 8px;
+  background: rgb(24 200 179 / 8%);
+  color: #b7f4ed;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.logs-refresh-button:disabled,
+.system-log-pagination button:disabled,
+.system-log-detail-heading button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.system-log-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.system-log-stat {
+  display: grid;
+  gap: 9px;
+  padding: 16px;
+  border: 1px solid rgb(181 197 224 / 12%);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgb(19 29 54 / 85%), rgb(12 19 39 / 95%));
+}
+
+.system-log-stat span {
+  color: #9faabd;
+  font-size: 11px;
+}
+
+.system-log-stat strong {
+  color: #eef4fa;
+  font-size: 25px;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-logs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.system-logs-filters .search-field {
+  flex: 1 1 260px;
+  max-width: 430px;
+}
+
+.system-logs-filters select,
+.system-logs-filters label > input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid rgb(181 197 224 / 16%);
+  border-radius: 8px;
+  outline: none;
+  background: #101a32;
+  color: #e4eaf3;
+  font: inherit;
+  font-size: 11px;
+}
+
+.system-logs-filters label:not(.search-field) {
+  display: grid;
+  gap: 4px;
+  color: #8d9ab0;
+  font-size: 10px;
+}
+
+.system-logs-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.75fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.system-log-table-wrap,
+.system-log-detail {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid rgb(181 197 224 / 12%);
+  border-radius: 12px;
+  background: rgb(12 19 39 / 85%);
+}
+
+.system-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  text-align: left;
+}
+
+.system-log-table th,
+.system-log-table td {
+  padding: 11px 10px;
+  border-bottom: 1px solid rgb(181 197 224 / 9%);
+  white-space: nowrap;
+}
+
+.system-log-table th {
+  color: #8997ae;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.system-log-table td {
+  color: #ccd5e2;
+}
+
+.system-log-table tbody tr:not(.no-results) {
+  cursor: pointer;
+}
+
+.system-log-table tbody tr:hover,
+.system-log-table tbody tr.is-selected {
+  background: rgb(24 200 179 / 7%);
+}
+
+.system-log-severity {
+  display: inline-flex;
+  padding: 4px 6px;
+  border-radius: 99px;
+  background: rgb(250 181 87 / 10%);
+  color: #f3c477;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.system-log-severity.severity-critical {
+  background: rgb(255 93 105 / 12%);
+  color: #ff8e97;
+}
+
+.system-log-severity.severity-warning {
+  background: rgb(250 181 87 / 10%);
+  color: #f3c477;
+}
+
+.system-log-empty {
+  padding: 24px !important;
+  color: #8997ae !important;
+  text-align: center;
+}
+
+.system-log-pagination {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+}
+
+.system-log-detail {
+  padding: 16px;
+  color: #cbd4e2;
+}
+
+.system-log-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.system-log-detail-heading h2 {
+  margin: 0;
+  color: #edf2f8;
+  font-size: 16px;
+}
+
+.system-log-detail dl {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1fr);
+  gap: 9px 12px;
+  margin: 0;
+  font-size: 10px;
+}
+
+.system-log-detail dt {
+  color: #8593a9;
+}
+
+.system-log-detail dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-log-detail pre {
+  max-height: 280px;
+  overflow: auto;
+  margin: 16px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #080e1d;
+  color: #aebbd0;
+  font-size: 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.system-log-scan-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #e9bf76;
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .system-logs-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 650px) {
+  .system-log-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .system-logs-filters {
+    align-items: stretch;
+  }
+
+  .system-logs-filters .search-field,
+  .system-logs-filters select,
+  .system-logs-filters label,
+  .system-logs-filters > button {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}

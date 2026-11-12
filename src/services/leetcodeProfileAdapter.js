@@ -26,6 +26,21 @@ function validateProfileResponse(response) {
 }
 
 function validateCalendarResponse(response) {
+  if (response?.calendarError) {
+    if (
+      typeof response.calendarError.code !== 'string'
+      || typeof response.calendarError.message !== 'string'
+    ) {
+      throw new Error('The LeetCode heatmap response contained an invalid availability message.')
+    }
+    return {
+      calendar: null,
+      availableYears: null,
+      error: Object.assign(new Error(response.calendarError.message), {
+        code: response.calendarError.code,
+      }),
+    }
+  }
   if (!Array.isArray(response?.calendar)) {
     throw new Error('The LeetCode heatmap response did not include a calendar.')
   }
@@ -111,6 +126,9 @@ export async function loadLeetcodeProfile(year, idToken, connectedProfile = null
           code: statsResponse.activityError.code,
         })
       : null
+  const heatmapError = heatmapResult.status === 'rejected'
+    ? heatmapResult.reason
+    : heatmapResult.value.error
 
   return {
     profile: profileResponse.profile,
@@ -123,6 +141,6 @@ export async function loadLeetcodeProfile(year, idToken, connectedProfile = null
     calendarSummary,
     unavailableFields: profileResponse.unavailableFields ?? [],
     statsError,
-    heatmapError: heatmapResult.status === 'rejected' ? heatmapResult.reason : null,
+    heatmapError,
   }
 }

@@ -20,6 +20,12 @@ best-effort deduplication, not a distributed guarantee across Render instances.
 Writes that fail fall back to sanitized standard application logs and do not
 fail the request that was being logged.
 
+Expected LeetCode limitations are not application errors: an unknown or
+non-public username still returns a client-facing 404 but is not added to
+System Logs, and a private submission calendar returns the profile page's
+partial response with a `calendarError` notice instead of a 503. Other upstream
+failures continue to be recorded.
+
 The default retention window is 30 days and can be changed with
 `SYSTEM_LOG_RETENTION_DAYS` (1–365). The admin API enforces this logical window;
 it does not configure Firestore TTL or delete old documents. Firestore storage

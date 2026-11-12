@@ -43,6 +43,7 @@ from .leetcode_persistence import (
 )
 from .leetcode_service import (
     LearnerRequestLimiter,
+    LeetCodeCalendarUnavailable,
     LeetCodeServiceError,
     leetcode_service,
     summarize_activity,
@@ -144,6 +145,10 @@ async def log_api_failures(request: Request, call_next):
         log_context = getattr(request.state, "log_context", {})
         should_capture = (
             request.url.path != "/api/client-errors"
+            and not (
+                response.status_code == 404
+                and log_context.get("error_code") == "leetcode_profile_not_found"
+            )
             and not (
                 request.url.path.startswith("/api/admin/system-logs")
                 and response.status_code >= 500
@@ -338,7 +343,7 @@ def _leetcode_response_error(
             "error_code": error.code,
             "message": str(error),
             "error": error,
-            "severity": "WARNING" if error.status_code == 429 else "ERROR",
+            "severity":             "WARNING" if error.status_code < 500 else "ERROR",
         }
     return HTTPException(
         status_code=error.status_code,
@@ -929,6 +934,15 @@ def get_leetcode_heatmap(
                 username,
                 set(range(effective_start.year, effective_end.year + 1)),
             )["availableYears"],
+        }
+    except LeetCodeCalendarUnavailable as error:
+        return {
+            "username": username,
+            "calendar": None,
+            "availableFrom": None,
+            "availableTo": None,
+            "availableYears": None,
+            "calendarError": {"code": error.code, "message": str(error)},
         }
     except LeetCodeServiceError as error:
         raise _leetcode_response_error(error, request) from error

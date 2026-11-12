@@ -183,6 +183,40 @@ def _normalize_linked_username(username: str) -> str:
         raise LeetCodeUpstreamError("The connected LeetCode username is invalid.") from error
 
 
+def _graphql_error_category(errors: Any) -> str | None:
+    if not errors:
+        return None
+
+    error_items = errors if isinstance(errors, list) else []
+    messages = []
+    for error in error_items:
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(message, str):
+            messages.append(message.casefold())
+    if any("user does not exist" in message for message in messages):
+        return "profile_not_found"
+    if any("no permission to check the calendar" in message for message in messages):
+        return "calendar_permission_denied"
+
+    for error in error_items:
+        if not isinstance(error, dict):
+            continue
+        extensions = error.get("extensions")
+        code = extensions.get("code", "") if isinstance(extensions, dict) else ""
+        message = error.get("message", "")
+        normalized_code = code.casefold() if isinstance(code, str) else ""
+        normalized_message = message.casefold() if isinstance(message, str) else ""
+        if (
+            "rate" in normalized_code
+            or "thrott" in normalized_code
+            or "rate limit" in normalized_message
+            or "too many requests" in normalized_message
+            or "throttl" in normalized_message
+        ):
+            return "rate_limited"
+    return "graphql_errors"
+
+
 def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     operation_match = re.search(r"\bquery\s+([A-Za-z0-9_]+)", query)
     operation = operation_match.group(1) if operation_match else "unknown"
@@ -204,6 +238,17 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
                 if response.status != 200:
                     raise LeetCodeUpstreamError("LeetCode returned an unsuccessful response.")
                 payload = json.loads(response.read())
+            category = (
+                _graphql_error_category(payload.get("errors"))
+                if isinstance(payload, dict) else None
+            )
+            if category == "graphql_errors" and attempt < len(UPSTREAM_RETRY_DELAYS_SECONDS):
+                logger.warning(
+                    "leetcode_graphql_response_error operation=%s category=graphql_errors retry=1",
+                    operation,
+                )
+                time.sleep(UPSTREAM_RETRY_DELAYS_SECONDS[attempt])
+                continue
             break
         except HTTPError as error:
             if error.code == 429:
@@ -261,21 +306,15 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
         raise LeetCodeUpstreamError("LeetCode returned an invalid response.")
     errors = payload.get("errors")
     if errors:
-        messages = [
-            error.get("message", "").casefold()
-            for error in errors
-            if isinstance(error, dict) and isinstance(error.get("message"), str)
-        ]
-        if any("user does not exist" in message for message in messages):
-            category = "profile_not_found"
+        category = _graphql_error_category(errors)
+        if category == "profile_not_found":
             logger.warning(
                 "leetcode_graphql_response_error operation=%s category=%s",
                 operation,
                 category,
             )
             raise LeetCodeProfileNotFound("The public LeetCode profile was not found.")
-        if any("no permission to check the calendar" in message for message in messages):
-            category = "calendar_permission_denied"
+        if category == "calendar_permission_denied":
             logger.warning(
                 "leetcode_graphql_response_error operation=%s category=%s",
                 operation,
@@ -284,26 +323,12 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
             raise LeetCodeCalendarUnavailable(
                 "LeetCode does not permit public access to this submission calendar."
             )
-        for error in errors:
-            if not isinstance(error, dict):
-                continue
-            extensions = error.get("extensions")
-            code = extensions.get("code", "") if isinstance(extensions, dict) else ""
-            message = error.get("message", "")
-            normalized_code = code.casefold() if isinstance(code, str) else ""
-            normalized_message = message.casefold() if isinstance(message, str) else ""
-            if (
-                "rate" in normalized_code
-                or "thrott" in normalized_code
-                or "rate limit" in normalized_message
-                or "too many requests" in normalized_message
-                or "throttl" in normalized_message
-            ):
-                logger.warning(
-                    "leetcode_graphql_response_error operation=%s category=rate_limited",
-                    operation,
-                )
-                raise LeetCodeUpstreamRateLimited("LeetCode is rate limiting profile requests.")
+        if category == "rate_limited":
+            logger.warning(
+                "leetcode_graphql_response_error operation=%s category=rate_limited",
+                operation,
+            )
+            raise LeetCodeUpstreamRateLimited("LeetCode is rate limiting profile requests.")
         logger.warning(
             "leetcode_graphql_response_error operation=%s category=graphql_errors count=%s",
             operation,

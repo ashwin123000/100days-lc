@@ -684,7 +684,9 @@ function LeetCodeProfile({ user, linkedUsername = '', onBack, onVerifiedProblems
         ) : !profileResponse ? (
           <div className="leetcode-empty-state" role="status">Connect a public LeetCode username below to view submission activity.</div>
         ) : calendarError ? (
-          <div className="leetcode-empty-state" role="alert">{displayError(calendarError, 'Could not load the LeetCode heatmap.')}</div>
+          <div className="leetcode-empty-state" role={calendarError.code === 'leetcode_calendar_unavailable' ? 'status' : 'alert'}>
+            {displayError(calendarError, 'Could not load the LeetCode heatmap.')}
+          </div>
         ) : !data?.calendar ? (
           <div className="leetcode-empty-state" role="status"><LoaderCircle className="leetcode-spinner" size={18} aria-hidden="true" /> Loading submission calendar…</div>
         ) : (

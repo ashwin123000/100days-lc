@@ -5,6 +5,7 @@ import {
   fetchSystemLogs,
   reportClientError,
 } from './api.js'
+import { loadLeetcodeProfile } from './leetcodeProfileAdapter.js'
 
 const originalFetch = globalThis.fetch
 const originalWindow = globalThis.window
@@ -48,6 +49,40 @@ test('reports HTTP 500 details and still rejects the original API request', asyn
   assert.equal(payload.requestId, 'request-500')
   assert.match(payload.message, /token=\[REDACTED\]/)
   assert.doesNotMatch(payload.message, /diagnostic-secret/)
+})
+
+test('loads profile data when LeetCode does not allow public calendar access', async () => {
+  globalThis.fetch = async (url) => {
+    if (url === '/api/leetcode/profile') {
+      return jsonResponse(200, {
+        profile: { username: 'sample_user' },
+        problemStatistics: { totalSolved: 10 },
+      })
+    }
+    if (url === '/api/leetcode/stats') {
+      return jsonResponse(200, {
+        problemStatistics: { totalSolved: 10 },
+        activity: null,
+        activityError: null,
+      })
+    }
+    if (url.startsWith('/api/leetcode/heatmap')) {
+      return jsonResponse(200, {
+        calendar: null,
+        calendarError: {
+          code: 'leetcode_calendar_unavailable',
+          message: 'LeetCode does not permit public access to this submission calendar.',
+        },
+      })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  }
+
+  const result = await loadLeetcodeProfile(2026, 'firebase-id-token')
+
+  assert.equal(result.profile.username, 'sample_user')
+  assert.equal(result.calendar, null)
+  assert.equal(result.heatmapError.code, 'leetcode_calendar_unavailable')
 })
 
 test('reports a final gateway 502 once after the bounded GET retry', async () => {

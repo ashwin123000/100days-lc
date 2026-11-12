@@ -186,6 +186,8 @@ def test_connect_requires_firebase_authentication():
 
 
 def test_connect_returns_not_found_for_unknown_public_profile(monkeypatch, learner):
+    captured = []
+    monkeypatch.setattr(main.system_logs, "capture_error_from_request", lambda **kwargs: captured.append(kwargs))
     monkeypatch.setattr(
         main.leetcode_service,
         "get_profile",
@@ -199,6 +201,7 @@ def test_connect_returns_not_found_for_unknown_public_profile(monkeypatch, learn
         )
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "leetcode_profile_not_found"
+    assert captured == []
 
 
 def test_profile_reads_only_the_authenticated_learners_link(monkeypatch, learner):
@@ -510,14 +513,82 @@ def test_graphql_error_response_is_logged_without_username(monkeypatch, caplog):
         def read(self):
             return b'{"errors":[{"message":"query failed"}],"data":null}'
 
-    monkeypatch.setattr(leetcode_service, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    calls = []
+    monkeypatch.setattr(
+        leetcode_service,
+        "urlopen",
+        lambda *_args, **_kwargs: calls.append(True) or FakeResponse(),
+    )
+    monkeypatch.setattr(leetcode_service.time, "sleep", lambda _delay: None)
 
     with caplog.at_level(logging.WARNING, logger=leetcode_service.__name__):
         with pytest.raises(LeetCodeUpstreamError):
             leetcode_service._graphql_request(PROFILE_QUERY, {"username": "private_user"})
 
     assert "leetcode_graphql_response_error operation=publicProfile category=graphql_errors" in caplog.text
+    assert len(calls) == 2
     assert "private_user" not in caplog.text
+
+
+def test_transient_graphql_error_is_retried_once(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self.body
+
+    responses = iter([
+        FakeResponse(b'{"errors":[{"message":"temporary resolver failure"}]}'),
+        FakeResponse(b'{"data":{"matchedUser":{"username":"sample_user"}}}'),
+    ])
+    calls = []
+
+    def fake_urlopen(*_args, **_kwargs):
+        calls.append(True)
+        return next(responses)
+
+    monkeypatch.setattr(leetcode_service, "urlopen", fake_urlopen)
+    monkeypatch.setattr(leetcode_service.time, "sleep", lambda _delay: None)
+
+    result = leetcode_service._graphql_request(PROFILE_QUERY, {"username": "sample_user"})
+
+    assert result == {"matchedUser": {"username": "sample_user"}}
+    assert len(calls) == 2
+
+
+def test_non_transient_graphql_errors_are_not_retried(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"errors":[{"message":"That user does not exist."}]}'
+
+    calls = []
+    monkeypatch.setattr(
+        leetcode_service,
+        "urlopen",
+        lambda *_args, **_kwargs: calls.append(True) or FakeResponse(),
+    )
+
+    with pytest.raises(LeetCodeProfileNotFound):
+        leetcode_service._graphql_request(PROFILE_QUERY, {"username": "missing_user"})
+
+    assert len(calls) == 1
 
 
 def test_graphql_calendar_permission_error_maps_to_specific_upstream_error(monkeypatch):
@@ -571,7 +642,9 @@ def test_stats_preserves_profile_data_when_calendar_is_unavailable(monkeypatch, 
     assert stats.json()["unavailableFields"] == ["activity"]
 
 
-def test_heatmap_surfaces_calendar_permission_failure(monkeypatch, learner):
+def test_heatmap_reports_calendar_permission_as_optional_unavailability(monkeypatch, learner):
+    captured = []
+    monkeypatch.setattr(main.system_logs, "capture_error_from_request", lambda **kwargs: captured.append(kwargs))
     monkeypatch.setattr(
         main.leetcode_service,
         "get_calendar",
@@ -588,9 +661,11 @@ def test_heatmap_surfaces_calendar_permission_failure(monkeypatch, learner):
             headers=TOKEN_HEADERS,
         )
 
-    assert heatmap.status_code == 503
-    assert heatmap.json()["detail"]["code"] == "leetcode_calendar_unavailable"
-    assert "does not permit public access" in heatmap.json()["detail"]["message"]
+    assert heatmap.status_code == 200
+    assert heatmap.json()["calendar"] is None
+    assert heatmap.json()["calendarError"]["code"] == "leetcode_calendar_unavailable"
+    assert "does not permit public access" in heatmap.json()["calendarError"]["message"]
+    assert captured == []
 
 
 def test_normalizes_heatmap_counts_and_rejects_malformed_entries():

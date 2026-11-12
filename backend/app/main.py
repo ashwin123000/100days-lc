@@ -8,7 +8,10 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from .challenge_persistence import (
     ChallengeConflict,
@@ -47,6 +50,7 @@ from .leetcode_service import (
 from .problem_catalog import ProblemCatalog, ProblemLookupError
 from .problem_persistence import get_active_potd, publish_potd, registered_learner_count
 from .schemas import (
+    ClientErrorRequest,
     ChallengeCompletionReportRequest,
     ChallengeCompletionReviewRequest,
     ChallengeDayAssignmentRequest,
@@ -59,6 +63,7 @@ from .schemas import (
     ProblemRecord,
 )
 from .settings import Settings
+from . import system_logs
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 settings = Settings.from_env()
@@ -81,8 +86,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["X-Request-ID", "X-Error-Source"],
 )
 
 
@@ -93,30 +99,96 @@ async def log_api_failures(request: Request, call_next):
     started_at = perf_counter()
     try:
         response = await call_next(request)
-    except Exception:
+    except Exception as error:
         route = request.scope.get("route")
-        logger.exception(
-            "api_request_exception request_id=%s method=%s route=%s",
-            request_id,
-            request.method,
-            getattr(route, "path", "unmatched"),
-        )
-        raise
-
-    route = request.scope.get("route")
-    route_path = getattr(route, "path", "unmatched")
-    if response.status_code >= 500:
-        error_source = response.headers.get("X-Error-Source", "backend")
-        response.headers.setdefault("X-Error-Source", error_source)
+        route_path = getattr(route, "path", request.url.path)
         logger.error(
-            "api_request_failure request_id=%s method=%s route=%s status=%s source=%s duration_ms=%.1f",
+            "api_request_exception request_id=%s method=%s route=%s error_type=%s",
             request_id,
             request.method,
             route_path,
-            response.status_code,
-            error_source,
-            (perf_counter() - started_at) * 1000,
+            type(error).__name__,
         )
+        if (
+            request.url.path != "/api/client-errors"
+            and not request.url.path.startswith("/api/admin/system-logs")
+        ):
+            await run_in_threadpool(
+                system_logs.capture_error_from_request,
+                source="BACKEND",
+                endpoint=route_path,
+                method=request.method,
+                status=500,
+                request_id=request_id,
+                user_id=getattr(request.state, "user_id", None),
+                duration_ms=(perf_counter() - started_at) * 1000,
+                error_code=type(error).__name__,
+                message=str(error),
+                error=error,
+            )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal Server Error"},
+            headers={
+                "X-Request-ID": request_id,
+                "X-Error-Source": "BACKEND",
+            },
+        )
+
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", request.url.path)
+    error_source = response.headers.get("X-Error-Source")
+    if response.status_code >= 500 or error_source or response.status_code in {401, 403}:
+        error_source = error_source or ("AUTH" if response.status_code in {401, 403} else "BACKEND")
+        response.headers["X-Error-Source"] = error_source
+        log_context = getattr(request.state, "log_context", {})
+        should_capture = (
+            request.url.path != "/api/client-errors"
+            and not (
+                request.url.path.startswith("/api/admin/system-logs")
+                and response.status_code >= 500
+            )
+        )
+        if should_capture:
+            previous_background = response.background
+
+            async def persist_request_error() -> None:
+                try:
+                    if previous_background is not None:
+                        await previous_background()
+                finally:
+                    await run_in_threadpool(
+                        system_logs.capture_error_from_request,
+                        source=log_context.get("source", error_source),
+                        endpoint=route_path,
+                        method=request.method,
+                        status=response.status_code,
+                        request_id=request_id,
+                        user_id=getattr(request.state, "user_id", None),
+                        duration_ms=(perf_counter() - started_at) * 1000,
+                        error_code=log_context.get("error_code", f"HTTP_{response.status_code}"),
+                        message=log_context.get(
+                            "message",
+                            f"Request failed with HTTP {response.status_code}.",
+                        ),
+                        error=log_context.get("error"),
+                        severity=log_context.get(
+                            "severity",
+                            "WARNING" if response.status_code in {401, 403} else "ERROR",
+                        ),
+                    )
+
+            response.background = BackgroundTask(persist_request_error)
+        if response.status_code >= 500:
+            logger.error(
+                "api_request_failure request_id=%s method=%s route=%s status=%s source=%s duration_ms=%.1f",
+                request_id,
+                request.method,
+                route_path,
+                response.status_code,
+                error_source,
+                (perf_counter() - started_at) * 1000,
+            )
     response.headers["X-Request-ID"] = request_id
     return response
 
@@ -128,6 +200,7 @@ catalog = ProblemCatalog(
     min_margin=settings.semantic_min_margin,
 )
 leetcode_request_limiter = LearnerRequestLimiter()
+frontend_error_limiter = LearnerRequestLimiter(limit=10, window_seconds=60)
 
 
 def _http_error(error: ProblemLookupError) -> HTTPException:
@@ -141,25 +214,57 @@ def _catalog(request: Request) -> ProblemCatalog:
     return request.app.state.catalog
 
 
-def _authenticated_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def _firebase_http_error(error: Exception, source: str | None = None) -> HTTPException:
+    if source is None:
+        source = "FIRESTORE" if isinstance(error, FirebaseServiceError) else "BACKEND"
+    return HTTPException(
+        status_code=503,
+        detail=str(error),
+        headers={"X-Error-Source": source},
+    )
+
+
+def _authenticated_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="A Firebase ID token is required.")
+        raise HTTPException(
+            status_code=401,
+            detail="A Firebase ID token is required.",
+            headers={"X-Error-Source": "AUTH"},
+        )
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
-        raise HTTPException(status_code=401, detail="A Firebase ID token is required.")
+        raise HTTPException(
+            status_code=401,
+            detail="A Firebase ID token is required.",
+            headers={"X-Error-Source": "AUTH"},
+        )
     try:
-        return verify_id_token(token)
+        user = verify_id_token(token)
+        uid = user.get("uid")
+        request.state.user_id = uid if isinstance(uid, str) else None
+        return user
     except FirebaseConfigurationError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error, "BACKEND") from error
     except FirebaseTokenError as error:
-        raise HTTPException(status_code=401, detail="The Firebase ID token is invalid or expired.") from error
+        raise HTTPException(
+            status_code=401,
+            detail="The Firebase ID token is invalid or expired.",
+            headers={"X-Error-Source": "AUTH"},
+        ) from error
     except FirebaseServiceError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error, "AUTH") from error
 
 
 def _admin_user(user: dict[str, Any] = Depends(_authenticated_user)) -> dict[str, Any]:
     if user.get("admin") is not True:
-        raise HTTPException(status_code=403, detail="An authorized admin account is required.")
+        raise HTTPException(
+            status_code=403,
+            detail="An authorized admin account is required.",
+            headers={"X-Error-Source": "AUTH"},
+        )
     return user
 
 
@@ -172,7 +277,7 @@ def _leetcode_learner(user: dict[str, Any] = Depends(_authenticated_user)) -> di
     except LearnerProfileNotFound as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     if profile.get("role") != "learner" or profile.get("isActive") is False:
         raise HTTPException(status_code=403, detail="An active MLSC learner profile is required.")
     if not leetcode_request_limiter.check(uid):
@@ -193,7 +298,7 @@ def _challenge_learner(user: dict[str, Any] = Depends(_authenticated_user)) -> d
     except LearnerProfileNotFound as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     if profile.get("role") != "learner" or profile.get("isActive") is False:
         raise HTTPException(status_code=403, detail="An active MLSC learner profile is required.")
     return {"uid": uid}
@@ -223,12 +328,23 @@ def _challenge_http_error(error: Exception) -> HTTPException:
     raise TypeError("Unsupported challenge error.")
 
 
-def _leetcode_response_error(error: LeetCodeServiceError) -> HTTPException:
+def _leetcode_response_error(
+    error: LeetCodeServiceError,
+    request: Request | None = None,
+) -> HTTPException:
+    if request is not None:
+        request.state.log_context = {
+            "source": error.source,
+            "error_code": error.code,
+            "message": str(error),
+            "error": error,
+            "severity": "WARNING" if error.status_code == 429 else "ERROR",
+        }
     return HTTPException(
         status_code=error.status_code,
         detail={"code": error.code, "message": str(error)},
         headers={
-            "X-Error-Source": "leetcode_upstream",
+            "X-Error-Source": error.source,
             **({"Retry-After": "60"} if error.status_code == 429 else {}),
         },
     )
@@ -292,6 +408,109 @@ def _sync_accepted_submissions(uid: str, profile: dict[str, Any]) -> dict[str, A
     )
 
 
+@app.post("/api/client-errors", status_code=202)
+def post_client_error(
+    payload: ClientErrorRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(_authenticated_user),
+) -> dict[str, bool]:
+    uid = user.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise HTTPException(
+            status_code=401,
+            detail="The Firebase ID token has no user identity.",
+            headers={"X-Error-Source": "AUTH"},
+        )
+    if not payload.endpoint.startswith("/") or payload.endpoint.startswith("//") or "?" in payload.endpoint:
+        raise HTTPException(status_code=422, detail="The error endpoint must be a relative path.")
+    if not frontend_error_limiter.check(uid):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many client error reports. Try again shortly.",
+            headers={"Retry-After": "60"},
+        )
+    system_logs.capture_error_from_request(
+        source="FRONTEND",
+        endpoint=payload.endpoint,
+        method="CLIENT",
+        status=0,
+        request_id=getattr(request.state, "request_id", ""),
+        user_id=uid,
+        error_code=payload.operation,
+        message=payload.message,
+        error=None,
+    )
+    return {"accepted": True}
+
+
+@app.get("/api/admin/system-logs")
+def get_system_logs(
+    page_size: int = Query(default=25, alias="pageSize", ge=1, le=50),
+    cursor: str | None = Query(default=None, min_length=1, max_length=512),
+    source: str | None = Query(default=None, max_length=40),
+    severity: str | None = Query(default=None, max_length=20),
+    resolution_status: str | None = Query(default=None, alias="resolutionStatus", max_length=20),
+    start_date: date | None = Query(default=None, alias="startDate"),
+    end_date: date | None = Query(default=None, alias="endDate"),
+    search: str | None = Query(default=None, max_length=120),
+    _user: dict[str, Any] = Depends(_admin_user),
+) -> dict[str, Any]:
+    try:
+        return system_logs.list_logs(
+            page_size=page_size,
+            cursor=cursor,
+            source=source,
+            severity=severity,
+            resolution_status=resolution_status,
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except system_logs.SystemLogStorageError as error:
+        raise _firebase_http_error(error, "FIRESTORE") from error
+
+
+@app.get("/api/admin/system-logs/{log_id}")
+def get_system_log(
+    log_id: str,
+    _user: dict[str, Any] = Depends(_admin_user),
+) -> dict[str, Any]:
+    try:
+        record = system_logs.get_log(log_id)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except system_logs.SystemLogStorageError as error:
+        raise _firebase_http_error(error, "FIRESTORE") from error
+    if record is None:
+        raise HTTPException(status_code=404, detail="The requested error log was not found.")
+    return record
+
+
+@app.patch("/api/admin/system-logs/{log_id}/resolve")
+def resolve_system_log(
+    log_id: str,
+    user: dict[str, Any] = Depends(_admin_user),
+) -> dict[str, Any]:
+    uid = user.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise HTTPException(
+            status_code=401,
+            detail="The Firebase ID token has no user identity.",
+            headers={"X-Error-Source": "AUTH"},
+        )
+    try:
+        record = system_logs.resolve_log(log_id, uid)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except system_logs.SystemLogStorageError as error:
+        raise _firebase_http_error(error, "FIRESTORE") from error
+    if record is None:
+        raise HTTPException(status_code=404, detail="The requested error log was not found.")
+    return record
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -308,7 +527,7 @@ def lookup_problem(payload: ProblemLookupRequest, request: Request) -> ProblemRe
     except ProblemLookupError as error:
         raise _http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error, "BACKEND") from error
     return ProblemRecord.model_validate({**problem, "original_url": payload.leetcode_url.strip()})
 
 
@@ -323,7 +542,7 @@ def get_problem(problem_id: str, request: Request) -> ProblemRecord:
     except ProblemLookupError as error:
         raise _http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error, "BACKEND") from error
     original_url = f"https://leetcode.com/problems/{problem['slug']}/"
     return ProblemRecord.model_validate({**problem, "original_url": original_url})
 
@@ -333,9 +552,9 @@ def get_potd() -> dict[str, Any]:
     try:
         return {"problem": get_active_potd()}
     except FirebaseConfigurationError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     except FirebaseServiceError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.post(
@@ -353,7 +572,7 @@ def prepare_potd(
     except ProblemLookupError as error:
         raise _http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error, "BACKEND") from error
     return ProblemRecord.model_validate({**record, "original_url": payload.leetcode_url.strip()})
 
 
@@ -378,11 +597,11 @@ def publish_daily_potd(
     except ProblemLookupError as error:
         raise _http_error(error) from error
     except FirebaseConfigurationError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     except FirebaseServiceError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error, "BACKEND") from error
     return {"problem": published}
 
 
@@ -395,9 +614,9 @@ def get_learner_count(_user: dict[str, Any] = Depends(_admin_user)) -> LearnerCo
     try:
         return LearnerCountResponse(count=registered_learner_count())
     except FirebaseConfigurationError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     except FirebaseServiceError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.put("/api/admin/challenge/days/{day}")
@@ -414,7 +633,7 @@ def put_challenge_day(
     except (ChallengeConflict, ChallengeNotConfigured, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.post("/api/admin/challenge/initialize")
@@ -429,7 +648,7 @@ def post_initialize_challenge(
     except ChallengeValidationError as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.get("/api/challenge/questions")
@@ -443,7 +662,7 @@ def get_challenge_question_history(
     except (ChallengeConflict, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.get("/api/challenge/progress")
@@ -457,7 +676,7 @@ def get_challenge_progress_summary(
     except (ChallengeConflict, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.get("/api/leaderboard")
@@ -467,7 +686,7 @@ def get_learner_leaderboard(
     try:
         return get_verified_challenge_leaderboard()
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.get("/api/admin/challenge/completions/pending")
@@ -481,7 +700,7 @@ def get_pending_challenge_completion_queue(
     except (ChallengeConflict, ChallengeNotConfigured, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.put("/api/challenge/days/{day}/completion")
@@ -495,7 +714,7 @@ def put_challenge_completion(
     except (ChallengeConflict, ChallengeNotConfigured, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.put("/api/admin/challenge/completions/{uid}/{day}")
@@ -519,11 +738,12 @@ def put_challenge_completion_review(
     except (ChallengeConflict, ChallengeNotConfigured, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.post("/api/leetcode/connect")
 def connect_leetcode_profile(
+    request: Request,
     payload: LeetCodeConnectRequest,
     refresh: bool = Query(default=False),
     learner: dict[str, Any] = Depends(_leetcode_learner),
@@ -581,13 +801,14 @@ def connect_leetcode_profile(
     except LearnerProfileNotFound as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     except LeetCodeServiceError as error:
-        raise _leetcode_response_error(error) from error
+        raise _leetcode_response_error(error, request) from error
 
 
 @app.get("/api/leetcode/profile")
 def get_leetcode_profile(
+    request: Request,
     refresh: bool = Query(default=False),
     learner: dict[str, Any] = Depends(_leetcode_learner),
 ) -> dict[str, Any]:
@@ -615,13 +836,14 @@ def get_leetcode_profile(
             response["challengeRecords"] = _challenge_records(learner["uid"])
         return response
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
     except LeetCodeServiceError as error:
-        raise _leetcode_response_error(error) from error
+        raise _leetcode_response_error(error, request) from error
 
 
 @app.post("/api/challenge/sync")
 def sync_leetcode_challenge_completions(
+    request: Request,
     refresh: bool = Query(default=False),
     learner: dict[str, Any] = Depends(_leetcode_learner),
 ) -> dict[str, Any]:
@@ -639,7 +861,7 @@ def sync_leetcode_challenge_completions(
         except (ChallengeConflict, ChallengeNotFound, ChallengeValidationError) as error:
             raise _challenge_http_error(error) from error
         except (FirebaseConfigurationError, FirebaseServiceError) as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise _firebase_http_error(error) from error
         return {
             "status": "awaiting_sync",
             "verifiedDays": [],
@@ -661,15 +883,16 @@ def sync_leetcode_challenge_completions(
             "dayStatuses": {},
         }
     except LeetCodeServiceError as error:
-        raise _leetcode_response_error(error) from error
+        raise _leetcode_response_error(error, request) from error
     except (ChallengeConflict, ChallengeNotConfigured, ChallengeNotFound, ChallengeValidationError) as error:
         raise _challenge_http_error(error) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error
 
 
 @app.get("/api/leetcode/heatmap")
 def get_leetcode_heatmap(
+    request: Request,
     start_date: date | None = Query(default=None, alias="from"),
     end_date: date | None = Query(default=None, alias="to"),
     refresh: bool = Query(default=False),
@@ -707,7 +930,7 @@ def get_leetcode_heatmap(
             )["availableYears"],
         }
     except LeetCodeServiceError as error:
-        raise _leetcode_response_error(error) from error
+        raise _leetcode_response_error(error, request) from error
     except ValueError as error:
         raise HTTPException(
             status_code=422,
@@ -717,6 +940,7 @@ def get_leetcode_heatmap(
 
 @app.get("/api/leetcode/stats")
 def get_leetcode_stats(
+    request: Request,
     refresh: bool = Query(default=False),
     learner: dict[str, Any] = Depends(_leetcode_learner),
 ) -> dict[str, Any]:
@@ -754,7 +978,7 @@ def get_leetcode_stats(
             )),
         }
     except LeetCodeServiceError as error:
-        raise _leetcode_response_error(error) from error
+        raise _leetcode_response_error(error, request) from error
 
 
 @app.delete("/api/leetcode/connect")
@@ -767,4 +991,4 @@ def disconnect_leetcode_profile(
     except LearnerProfileNotFound as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (FirebaseConfigurationError, FirebaseServiceError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise _firebase_http_error(error) from error

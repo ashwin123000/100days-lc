@@ -86,6 +86,15 @@ class LearnerCountResponse(BaseModel):
     count: int
 
 
+class ClientErrorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: str = Field(min_length=1, max_length=120)
+    endpoint: str = Field(min_length=1, max_length=300)
+    message: str = Field(min_length=1, max_length=2000)
+    stack_trace: str = Field(default="", max_length=12000, alias="stackTrace")
+
+
 class ErrorResponse(BaseModel):
     detail: str
     code: str

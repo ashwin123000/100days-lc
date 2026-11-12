@@ -75,6 +75,11 @@ UPSTREAM_RETRY_DELAYS_SECONDS = (0.25,)
 class LeetCodeServiceError(RuntimeError):
     status_code = 502
     code = "leetcode_upstream_error"
+    source = "LEETCODE_GRAPHQL"
+
+
+class LeetCodeUpstreamError(LeetCodeServiceError):
+    pass
 
 
 class LeetCodeProfileNotFound(LeetCodeServiceError):
@@ -85,6 +90,11 @@ class LeetCodeProfileNotFound(LeetCodeServiceError):
 class LeetCodeUpstreamTimeout(LeetCodeServiceError):
     status_code = 504
     code = "leetcode_timeout"
+    source = "LEETCODE_NETWORK"
+
+
+class LeetCodeUpstreamHttpError(LeetCodeUpstreamError):
+    source = "LEETCODE_HTTP"
 
 
 class LeetCodeCalendarUnavailable(LeetCodeServiceError):
@@ -95,10 +105,11 @@ class LeetCodeCalendarUnavailable(LeetCodeServiceError):
 class LeetCodeUpstreamRateLimited(LeetCodeServiceError):
     status_code = 429
     code = "leetcode_rate_limited"
+    source = "LEETCODE_HTTP"
 
 
-class LeetCodeUpstreamError(LeetCodeServiceError):
-    pass
+class LeetCodeUpstreamNetworkError(LeetCodeServiceError):
+    source = "LEETCODE_NETWORK"
 
 
 @dataclass
@@ -216,14 +227,14 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
                 operation,
                 error.code,
             )
-            raise LeetCodeUpstreamError("LeetCode returned an unsuccessful response.") from error
+            raise LeetCodeUpstreamHttpError("LeetCode returned an unsuccessful HTTP response.") from error
         except (TimeoutError, URLError) as error:
             if isinstance(error, URLError) and not isinstance(error.reason, TimeoutError):
                 logger.warning(
                     "leetcode_graphql_transport_error operation=%s category=connection",
                     operation,
                 )
-                raise LeetCodeUpstreamError("LeetCode could not be reached.") from error
+                raise LeetCodeUpstreamNetworkError("LeetCode could not be reached.") from error
             logger.warning(
                 "leetcode_graphql_transport_error operation=%s category=timeout",
                 operation,
@@ -240,7 +251,7 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
                 "leetcode_graphql_transport_error operation=%s category=connection",
                 operation,
             )
-            raise LeetCodeUpstreamError("LeetCode could not be reached.") from error
+            raise LeetCodeUpstreamNetworkError("LeetCode could not be reached.") from error
 
     if not isinstance(payload, dict):
         logger.warning(

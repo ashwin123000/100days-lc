@@ -58,7 +58,17 @@ function Navbar({ onNavigate, user, isAdmin, onLogout }) {
         : link)
     : links
   const visibleLinks = user
-    ? [...availableLinks.filter((link) => link.page !== 'login'), { label: 'Log out', action: 'logout' }]
+    ? [
+      ...availableLinks.filter((link) => (
+        link.page !== 'login'
+        && !(isAdmin && (link.comingSoon || link.action === 'start-solving'))
+      )),
+      ...(isAdmin ? [
+        { label: 'Admin Dashboard', page: 'admin' },
+        { label: 'Error Logs', page: 'error-logs' },
+      ] : []),
+      { label: 'Log out', action: 'logout' },
+    ]
     : availableLinks
 
   const handleNavigate = (link) => {

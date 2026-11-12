@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AuthProvider } from './contexts/AuthContext.jsx'
 import { useAuth } from './hooks/useAuth.js'
 import Navbar from './components/Navbar.jsx'
@@ -14,6 +14,7 @@ import AuthPage from './sections/AuthPage.jsx'
 import ProblemWorkspace from './sections/ProblemWorkspace.jsx'
 import LeetCodeProfile from './sections/LeetCodeProfile.jsx'
 import Leaderboard from './sections/Leaderboard.jsx'
+import SystemLogsDashboard from './sections/SystemLogsDashboard.jsx'
 import {
   saveUserNote,
   setProblemBookmarked,
@@ -29,12 +30,42 @@ import {
   initializeChallenge,
   preparePotd as preparePotdRequest,
   publishPotd as publishPotdRequest,
+  reportClientError,
   withFirebaseToken,
 } from './services/api.js'
 import { canonicalToListProblem, canonicalToWorkspaceProblem } from './utils/problemData.js'
 
-const routeNames = new Set(['home', 'platform', 'login', 'auth', 'admin', 'problems', 'daily', 'workspace', 'profile', 'leaderboard'])
+const routeNames = new Set(['home', 'platform', 'login', 'auth', 'admin', 'error-logs', 'problems', 'daily', 'workspace', 'profile', 'leaderboard'])
 const learnerRoutes = new Set(['platform', 'problems', 'daily', 'workspace', 'profile', 'leaderboard'])
+const adminRoutes = new Set(['admin', 'error-logs'])
+
+class AppErrorBoundary extends Component {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error, info) {
+    const { user } = this.props
+    if (!user) return
+    user.getIdToken()
+      .then((token) => reportClientError(token, {
+        operation: 'react_render_error',
+        endpoint: window.location.pathname,
+        message: error instanceof Error ? error.message : String(error),
+        stackTrace: `${error?.stack ?? ''}\n${info.componentStack ?? ''}`,
+      }))
+      .catch((reportError) => console.warn('Client render error could not be reported', reportError))
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div className="account-check-state" role="alert">This page encountered an error. Reload the page to try again.</div>
+    }
+    return this.props.children
+  }
+}
 
 function routeFromLocation() {
   const [name, ...parts] = window.location.hash.slice(1).split('/')
@@ -123,7 +154,7 @@ function AppContent() {
 
   useEffect(() => {
     if (auth.loading) return
-    if (route.page === 'admin') {
+    if (adminRoutes.has(route.page)) {
       if (!auth.user) navigate('auth', null, true, 'admin')
       else if (!auth.isAdmin) navigate(auth.profile ? 'platform' : 'auth', null, true, 'learner')
       return
@@ -142,6 +173,28 @@ function AppContent() {
       }
     }
   }, [auth.isAdmin, auth.loading, auth.profile, auth.user, navigate, route.authMode, route.page])
+
+  useEffect(() => {
+    if (!auth.user) return undefined
+    const report = (operation, error) => {
+      auth.user.getIdToken()
+        .then((token) => reportClientError(token, {
+          operation,
+          endpoint: window.location.pathname,
+          message: error instanceof Error ? error.message : String(error ?? 'Unknown client error'),
+          stackTrace: error instanceof Error ? error.stack ?? '' : '',
+        }))
+        .catch((reportError) => console.warn('Client error could not be reported', reportError))
+    }
+    const onUnhandledRejection = (event) => report('unhandled_promise_rejection', event.reason)
+    const onWindowError = (event) => report('window_runtime_error', event.error ?? event.message)
+    window.addEventListener('unhandledrejection', onUnhandledRejection)
+    window.addEventListener('error', onWindowError)
+    return () => {
+      window.removeEventListener('unhandledrejection', onUnhandledRejection)
+      window.removeEventListener('error', onWindowError)
+    }
+  }, [auth.user])
 
   useEffect(() => {
     if (route.page === 'home' && pendingNavTarget.current) {
@@ -421,12 +474,13 @@ function AppContent() {
   )
   const adminAccess = !auth.loading && Boolean(auth.user && auth.isAdmin)
   const requiresLearner = learnerRoutes.has(route.page)
-  const accessDenied = (requiresLearner && !learnerAccess) || (route.page === 'admin' && !adminAccess)
+  const accessDenied = (requiresLearner && !learnerAccess) || (adminRoutes.has(route.page) && !adminAccess)
 
   return (
+    <AppErrorBoundary user={auth.user}>
     <div className="min-h-screen bg-midnight text-white">
       <Navbar onNavigate={navigateFromNavbar} user={auth.user} isAdmin={auth.isAdmin} onLogout={startLogout} />
-      {dataError && (learnerRoutes.has(route.page) || route.page === 'admin') && (
+      {dataError && (learnerRoutes.has(route.page) || adminRoutes.has(route.page)) && (
         <div className="api-notice" role="status">{dataError}</div>
       )}
       <main>
@@ -489,6 +543,12 @@ function AppContent() {
             onCycleStatus={cycleStatus}
           />
         )}
+            {route.page === 'error-logs' && (
+          <SystemLogsDashboard
+            user={auth.user}
+            onBack={() => navigate('admin')}
+          />
+        )}
             {route.page === 'workspace' && (
           <ProblemWorkspace
             key={`${resourceKey || route.problemId}-${workspaceInitialTab}`}
@@ -542,6 +602,7 @@ function AppContent() {
         />
       )}
     </div>
+    </AppErrorBoundary>
   )
 }
 

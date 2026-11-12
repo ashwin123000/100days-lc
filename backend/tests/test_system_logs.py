@@ -188,6 +188,50 @@ def test_record_error_sanitizes_secrets_and_deduplicates(monkeypatch):
     assert "private-token" not in repr(database.logs.documents[0])
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "visible_text"),
+    [
+        ("token=secret-token", "[REDACTED]"),
+        ("key=secret-key", "[REDACTED]"),
+        ('{"apiKey":"secret-api-key"}', "[REDACTED]"),
+        ("password: super-secret", "[REDACTED]"),
+        ("Authorization: Bearer auth-secret", "Bearer [REDACTED]"),
+        ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "Basic [REDACTED]"),
+        ("Cookie: session=private-cookie", "[REDACTED]"),
+        ("https://example.test/path?access_token=secret%2Fvalue&page=2", "page=2"),
+        (
+            "https%3A%2F%2Fexample.test%2F%3Frefresh_token%3Dencoded%252Dsecret%26page%3D2",
+            "%3Frefresh_token%3D%5BREDACTED%5D",
+        ),
+        ("firebase_api_key=AIzaSyDUMMYKEY012345678901234567890123456", "[REDACTED]"),
+        ("private_key_id: key-id-secret", "[REDACTED]"),
+        ("client_secret=oauth-client-secret", "[REDACTED]"),
+        ("https://alice:url-password@example.test/path", "https://alice:[REDACTED]@"),
+        (
+            "id token eyJabcdefghijk.abcdefghijk.abcdefghijk",
+            "id token [REDACTED]",
+        ),
+        ("oauth ya29.abcdefghijklmnopqrstuvwxyz012345", "oauth [REDACTED]"),
+    ],
+)
+def test_sanitize_text_redacts_supported_credential_formats(diagnostic, visible_text):
+    sanitized = system_logs.sanitize_text(diagnostic)
+
+    assert visible_text in sanitized
+    assert "secret-token" not in sanitized
+    assert "secret-key" not in sanitized
+    assert "secret-api-key" not in sanitized
+    assert "super-secret" not in sanitized
+    assert "auth-secret" not in sanitized
+    assert "private-cookie" not in sanitized
+
+
+def test_sanitizer_preserves_non_sensitive_debug_information():
+    diagnostic = "GET /problems/two-sum?page=2&sort=recent returned 503"
+
+    assert system_logs.sanitize_text(diagnostic) == diagnostic
+
+
 def test_record_error_falls_back_to_sanitized_standard_logging(monkeypatch, caplog):
     class BrokenFirestore:
         def collection(self, _name):
@@ -266,3 +310,46 @@ def test_resolve_log_records_the_authenticated_admin_and_keeps_detail(monkeypatc
     assert resolved["resolvedBy"] == "admin-3"
     assert resolved["stackTrace"] == "trace"
     assert document.data["resolvedAt"] is not None
+
+
+def test_frontend_stack_trace_is_sanitized_before_persistence(monkeypatch):
+    database = FakeFirestore()
+    monkeypatch.setattr(system_logs, "firestore_client", lambda: database)
+    monkeypatch.setattr(system_logs, "_recent_fingerprints", {})
+
+    system_logs.capture_error_from_request(
+        source="FRONTEND",
+        endpoint="/profile",
+        method="GET",
+        status=502,
+        request_id="frontend-request-1",
+        user_id="learner-1",
+        message="Upstream returned token=message-secret",
+        stack_trace="Error: failed?api_key=stack-secret\n at Profile (profile.js:12)",
+    )
+
+    event = database.logs.documents[0]
+    assert event["message"] == "Upstream returned token=[REDACTED]"
+    assert "stack-secret" not in event["stackTrace"]
+    assert "api_key=[REDACTED]" in event["stackTrace"]
+    assert "profile.js:12" in event["stackTrace"]
+
+
+def test_frontend_request_id_is_sanitized_before_search_indexing(monkeypatch):
+    database = FakeFirestore()
+    monkeypatch.setattr(system_logs, "firestore_client", lambda: database)
+    monkeypatch.setattr(system_logs, "_recent_fingerprints", {})
+
+    system_logs.capture_error_from_request(
+        source="FRONTEND",
+        endpoint="/profile",
+        method="GET",
+        status=502,
+        request_id="token=request-id-secret",
+        user_id="learner-1",
+        message="Request failed.",
+    )
+
+    event = database.logs.documents[0]
+    assert event["requestId"] == "token=[REDACTED]"
+    assert "request-id-secret" not in repr(event)

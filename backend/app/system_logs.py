@@ -9,6 +9,7 @@ import time
 import traceback
 from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote_plus
 
 from firebase_admin import firestore
 from google.api_core.exceptions import GoogleAPIError
@@ -40,11 +41,66 @@ MAX_MESSAGE_LENGTH = 1000
 MAX_STACK_LENGTH = 6000
 MAX_SCAN_PER_PAGE = 500
 MAX_DEDUPE_ENTRIES = 4096
-_SECRET_PATTERN = re.compile(
-    r"(?i)(authorization\s*[:=]\s*bearer\s+|bearer\s+|"
-    r"(?:id[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|"
-    r"password|secret|cookie)\s*[:=]\s*)[^\s,;\"']+"
+_KEY_CHARACTER = r"(?:%[0-9a-f]{2}|[a-z0-9_.-])+"
+_SENSITIVE_KEY_CHARACTER = (
+    r"(?:access[_-]?token|auth(?:orization)?|api[_-]?key|client[_-]?secret|"
+    r"cookie|credentials?|firebase[_-]?(?:api[_-]?key|token)|id[_-]?token|"
+    r"key|password|private[_-]?key(?:[_-]?id)?|refresh[_-]?token|secret|"
+    r"session|signature|token|x[_-]?api[_-]?key)"
 )
+_QUOTED_SECRET_ASSIGNMENT = re.compile(
+    rf"""(?i)(?P<prefix>(?<![a-z0-9_.-])["']?)(?P<key>{_SENSITIVE_KEY_CHARACTER})"""
+    r"""(?P<key_quote>["']?)(?P<before>\s*)(?P<separator>[:=])(?P<after>\s*)"""
+    r"""(?P<quote>["'])(?P<value>.*?)(?P=quote)""",
+    re.DOTALL,
+)
+_UNQUOTED_SECRET_ASSIGNMENT = re.compile(
+    rf"""(?i)(?P<prefix>(?<![a-z0-9_.-])["']?)(?P<key>{_SENSITIVE_KEY_CHARACTER})"""
+    r"""(?P<key_quote>["']?)(?P<before>\s*)(?P<separator>[:=])(?P<after>\s*)"""
+    r"""(?P<value_quote>["']?)"""
+    r"""(?P<value>[^\s,;'"<>}&]*)"""
+)
+_AUTHORIZATION_VALUE = re.compile(
+    r"""(?i)(?P<prefix>\bauthorization\s*[:=]\s*)"""
+    r"""(?P<scheme>(?:bearer|basic)\s+)?(?P<value>[^\s,;"']+)"""
+)
+_BEARER_VALUE = re.compile(r"(?i)\b(?P<scheme>bearer|basic)\s+(?P<value>[A-Za-z0-9._~+/-]+=*)")
+_ENCODED_QUERY_SECRET = re.compile(
+    r"""(?i)(?P<prefix>%3f|%26)(?P<key>(?:%[0-9a-f]{2}|[a-z0-9_.-])+?)%3d"""
+    r"""(?P<value>(?:(?!%26|%23).)*)"""
+)
+_URL_USER_PASSWORD = re.compile(
+    r"(?i)(?P<prefix>https?://[^:/@\s]+:)(?P<value>[^@/\s]+)(?=@)"
+)
+_FIREBASE_API_KEY = re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b")
+_JWT_CREDENTIAL = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+)
+_GOOGLE_OAUTH_CREDENTIAL = re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b")
+_SENSITIVE_NAMES = {
+    "access_token",
+    "auth",
+    "authorization",
+    "api_key",
+    "apikey",
+    "client_secret",
+    "cookie",
+    "credential",
+    "credentials",
+    "firebase_api_key",
+    "firebase_token",
+    "id_token",
+    "key",
+    "password",
+    "private_key",
+    "private_key_id",
+    "refresh_token",
+    "secret",
+    "session",
+    "signature",
+    "token",
+    "x_api_key",
+}
 _SEARCH_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _dedupe_lock = threading.Lock()
 _recent_fingerprints: dict[str, tuple[float, int]] = {}
@@ -53,7 +109,64 @@ _recent_fingerprints: dict[str, tuple[float, int]] = {}
 def sanitize_text(value: Any, limit: int = MAX_MESSAGE_LENGTH) -> str:
     if not isinstance(value, str):
         value = str(value)
-    sanitized = _SECRET_PATTERN.sub(r"\1[REDACTED]", value)
+
+    def is_sensitive_name(value: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]+", "_", unquote_plus(value.strip("\"'")).casefold()).strip("_")
+        return normalized in _SENSITIVE_NAMES
+
+    def redact_quoted(match: re.Match[str]) -> str:
+        if not is_sensitive_name(match.group("key")):
+            return match.group(0)
+        return (
+            match.group("prefix")
+            + match.group("key")
+            + match.group("key_quote")
+            + match.group("before")
+            + match.group("separator")
+            + match.group("after")
+            + match.group("quote")
+            + "[REDACTED]"
+            + match.group("quote")
+        )
+
+    def redact_unquoted(match: re.Match[str]) -> str:
+        if match.group("key").casefold() == "authorization":
+            return match.group(0)
+        if not is_sensitive_name(match.group("key")):
+            return match.group(0)
+        quote = match.group("value_quote")
+        return (
+            match.group("prefix")
+            + match.group("key")
+            + match.group("key_quote")
+            + match.group("before")
+            + match.group("separator")
+            + match.group("after")
+            + quote
+            + "[REDACTED]"
+            + (quote if quote else "")
+        )
+
+    def redact_authorization(match: re.Match[str]) -> str:
+        return match.group("prefix") + (match.group("scheme") or "") + "[REDACTED]"
+
+    def redact_bearer(match: re.Match[str]) -> str:
+        return match.group("scheme") + " [REDACTED]"
+
+    def redact_encoded_query(match: re.Match[str]) -> str:
+        if not is_sensitive_name(match.group("key")):
+            return match.group(0)
+        return match.group("prefix") + match.group("key") + "%3D%5BREDACTED%5D"
+
+    sanitized = _URL_USER_PASSWORD.sub(r"\g<prefix>[REDACTED]", value)
+    sanitized = _ENCODED_QUERY_SECRET.sub(redact_encoded_query, sanitized)
+    sanitized = _QUOTED_SECRET_ASSIGNMENT.sub(redact_quoted, sanitized)
+    sanitized = _AUTHORIZATION_VALUE.sub(redact_authorization, sanitized)
+    sanitized = _UNQUOTED_SECRET_ASSIGNMENT.sub(redact_unquoted, sanitized)
+    sanitized = _BEARER_VALUE.sub(redact_bearer, sanitized)
+    sanitized = _FIREBASE_API_KEY.sub("[REDACTED]", sanitized)
+    sanitized = _JWT_CREDENTIAL.sub("[REDACTED]", sanitized)
+    sanitized = _GOOGLE_OAUTH_CREDENTIAL.sub("[REDACTED]", sanitized)
     sanitized = "".join(char for char in sanitized if char in "\n\t" or ord(char) >= 32)
     return sanitized[:limit]
 
@@ -136,6 +249,7 @@ def record_error(
     duration_ms: float | None = None,
     severity: str = "ERROR",
     error: BaseException | None = None,
+    stack_trace: str | None = None,
 ) -> bool:
     normalized_source = source if source in SOURCES else "BACKEND"
     normalized_severity = severity if severity in SEVERITIES else "ERROR"
@@ -144,6 +258,7 @@ def record_error(
     safe_operation = sanitize_text(operation, 120)
     safe_endpoint = sanitize_text(endpoint, 300)
     safe_error_code = sanitize_text(error_code, 120)
+    safe_request_id = sanitize_text(request_id, 100)
     tokens = sorted(set(_SEARCH_TOKEN_PATTERN.findall(
         " ".join((
             normalized_source,
@@ -152,7 +267,7 @@ def record_error(
             safe_endpoint,
             safe_error_code,
             safe_message,
-            request_id,
+            safe_request_id,
         )).casefold()
     )))
     event = {
@@ -166,9 +281,12 @@ def record_error(
         "durationMs": max(0, round(duration_ms)) if duration_ms is not None else None,
         "errorCode": safe_error_code,
         "message": safe_message,
-        "requestId": sanitize_text(request_id, 100),
+        "requestId": safe_request_id,
         "userId": sanitize_text(user_id, 128) if user_id else None,
-        "stackTrace": _stack_trace(error),
+        "stackTrace": sanitize_text(
+            stack_trace if stack_trace is not None else _stack_trace(error),
+            MAX_STACK_LENGTH,
+        ),
         "resolutionStatus": "OPEN",
         "resolvedAt": None,
         "resolvedBy": None,
@@ -435,6 +553,7 @@ def capture_error_from_request(
     message: str | None = None,
     error: BaseException | None = None,
     severity: str = "ERROR",
+    stack_trace: str | None = None,
 ) -> bool:
     operation = endpoint.strip("/").replace("/", "_") or "request"
     return record_error(
@@ -458,4 +577,5 @@ def capture_error_from_request(
         duration_ms=duration_ms,
         severity=severity,
         error=error,
+        stack_trace=stack_trace,
     )

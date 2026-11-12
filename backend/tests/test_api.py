@@ -324,6 +324,9 @@ def test_authenticated_client_error_is_logged_with_server_uid(monkeypatch):
                 "endpoint": "/profile",
                 "message": "Client rendering failed.",
                 "stackTrace": "at App (app.jsx:1)",
+                "method": "GET",
+                "httpStatus": 502,
+                "requestId": "browser-request-2",
             },
         )
 
@@ -333,6 +336,60 @@ def test_authenticated_client_error_is_logged_with_server_uid(monkeypatch):
     assert captured["user_id"] == "learner-2"
     assert captured["endpoint"] == "/profile"
     assert captured["error_code"] == "unhandled_promise_rejection"
+    assert captured["method"] == "GET"
+    assert captured["status"] == 502
+    assert captured["request_id"] == "browser-request-2"
+    assert captured["stack_trace"] == "at App (app.jsx:1)"
+
+
+@pytest.mark.parametrize(
+    "stack_trace",
+    [123, "x" * 12001],
+)
+def test_client_error_stack_trace_requires_bounded_string(stack_trace, monkeypatch):
+    monkeypatch.setattr(main, "verify_id_token", lambda _token: {"uid": "learner-2"})
+    monkeypatch.setattr(
+        main.system_logs,
+        "capture_error_from_request",
+        lambda **_kwargs: pytest.fail("invalid stack trace was persisted"),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/client-errors",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "operation": "react_render_error",
+                "endpoint": "/profile",
+                "message": "Render failed.",
+                "stackTrace": stack_trace,
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_admin_error_detail_returns_stack_trace(monkeypatch):
+    monkeypatch.setattr(main, "verify_id_token", lambda _token: {"uid": "admin-1", "admin": True})
+    monkeypatch.setattr(
+        main.system_logs,
+        "get_log",
+        lambda log_id: {
+            "id": log_id,
+            "source": "FRONTEND",
+            "message": "Render failed.",
+            "stackTrace": "sanitized stack detail",
+        },
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/admin/system-logs/log-12",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["stackTrace"] == "sanitized stack detail"
 
 
 def test_client_error_endpoint_rejects_external_endpoint_urls(monkeypatch):

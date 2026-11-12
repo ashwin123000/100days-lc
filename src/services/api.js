@@ -1,3 +1,55 @@
+const CLIENT_ERROR_REPORT_LIMIT = 5
+const CLIENT_ERROR_REPORT_WINDOW_MS = 60_000
+const CLIENT_ERROR_DEDUPE_WINDOW_MS = 5 * 60_000
+const recentClientErrorReports = new Map()
+const clientErrorReportTimes = []
+
+function sanitizeDiagnosticText(value, limit = 1200) {
+  return String(value ?? '')
+    .replace(
+      /((?:authorization|(?:firebase[_-]?)?(?:access[_-]?token|id[_-]?token|refresh[_-]?token|token|api[_-]?key|key|password|secret|cookie|private[_-]?key|client[_-]?secret)\s*[:=]\s*)(["']))[^"']*\2/gi,
+      '$1[REDACTED]$2',
+    )
+    .replace(
+      /((?:authorization|(?:firebase[_-]?)?(?:access[_-]?token|id[_-]?token|refresh[_-]?token|token|api[_-]?key|key|password|secret|cookie|private[_-]?key|client[_-]?secret)\s*[:=]\s*))[^\s,;"']+/gi,
+      '$1[REDACTED]',
+    )
+    .replace(
+      /([?&](?:[^=&#]*(?:token|key|secret|password|cookie|auth)[^=&#]*)=)[^&#\s]*/gi,
+      '$1[REDACTED]',
+    )
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/-]+=*/gi, '$1 [REDACTED]')
+    .slice(0, limit)
+}
+
+function shouldReportClientError(payload) {
+  const now = Date.now()
+  while (clientErrorReportTimes.length && now - clientErrorReportTimes[0] >= CLIENT_ERROR_REPORT_WINDOW_MS) {
+    clientErrorReportTimes.shift()
+  }
+  for (const [fingerprint, timestamp] of recentClientErrorReports) {
+    if (now - timestamp >= CLIENT_ERROR_DEDUPE_WINDOW_MS) recentClientErrorReports.delete(fingerprint)
+  }
+
+  const fingerprint = [
+    payload.endpoint,
+    payload.method,
+    payload.httpStatus,
+    payload.requestId,
+    payload.message,
+  ].join('|')
+  if (recentClientErrorReports.has(fingerprint) || clientErrorReportTimes.length >= CLIENT_ERROR_REPORT_LIMIT) {
+    return false
+  }
+
+  recentClientErrorReports.set(fingerprint, now)
+  clientErrorReportTimes.push(now)
+  if (recentClientErrorReports.size > 256) {
+    recentClientErrorReports.delete(recentClientErrorReports.keys().next().value)
+  }
+  return true
+}
+
 async function requestJson(path, options = {}, idToken = '') {
   let response
   const method = (options.method ?? 'GET').toUpperCase()
@@ -17,12 +69,15 @@ async function requestJson(path, options = {}, idToken = '') {
       response = await request()
     }
   } catch (error) {
-    if (idToken) {
+    if (idToken && path.split('?')[0] !== '/api/client-errors') {
       void reportClientError(idToken, {
         operation: 'api_network_error',
         endpoint: path.split('?')[0],
-        message: error instanceof Error ? error.message : 'The API request could not be reached.',
-        stackTrace: error instanceof Error ? error.stack ?? '' : '',
+        method,
+        message: sanitizeDiagnosticText(
+          error instanceof Error ? error.message : 'The API request could not be reached.',
+        ),
+        stackTrace: sanitizeDiagnosticText(error instanceof Error ? error.stack ?? '' : '', 6000),
       })
     }
     throw new Error(
@@ -44,6 +99,21 @@ async function requestJson(path, options = {}, idToken = '') {
         source: errorSource,
         requestId,
       })
+      if (idToken && path.split('?')[0] !== '/api/client-errors') {
+        const responseInfo = detail == null
+          ? body
+          : detail
+        void reportClientError(idToken, {
+          operation: 'api_http_5xx',
+          endpoint: path.split('?')[0],
+          method,
+          httpStatus: response.status,
+          requestId,
+          message: sanitizeDiagnosticText(
+            `HTTP ${response.status}: ${typeof responseInfo === 'string' ? responseInfo : JSON.stringify(responseInfo ?? 'No response details available.')}`,
+          ),
+        })
+      }
     }
     const error = new Error(
       typeof detail === 'string'
@@ -69,14 +139,15 @@ async function requestJson(path, options = {}, idToken = '') {
 
 export async function reportClientError(idToken, payload) {
   if (!idToken) return
-  const safePayload = {
-    ...payload,
-    operation: String(payload.operation ?? 'client_error').slice(0, 120),
-    endpoint: String(payload.endpoint ?? '/').slice(0, 300),
-    message: String(payload.message ?? 'Unknown client error').slice(0, 2000),
-    stackTrace: String(payload.stackTrace ?? '').slice(0, 12000),
-  }
   try {
+    const safePayload = {
+      ...payload,
+      operation: String(payload.operation ?? 'client_error').slice(0, 120),
+      endpoint: sanitizeDiagnosticText(payload.endpoint ?? '/', 300),
+      message: sanitizeDiagnosticText(payload.message ?? 'Unknown client error', 2000),
+      stackTrace: sanitizeDiagnosticText(payload.stackTrace ?? '', 6000),
+    }
+    if (!shouldReportClientError(safePayload)) return
     const response = await fetch('/api/client-errors', {
       method: 'POST',
       headers: {

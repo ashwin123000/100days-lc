@@ -92,7 +92,10 @@ class ClientErrorRequest(BaseModel):
     operation: str = Field(min_length=1, max_length=120)
     endpoint: str = Field(min_length=1, max_length=300)
     message: str = Field(min_length=1, max_length=2000)
-    stack_trace: str = Field(default="", max_length=12000, alias="stackTrace")
+    stack_trace: str = Field(default="", strict=True, max_length=12000, alias="stackTrace")
+    method: str | None = Field(default=None, strict=True, max_length=12)
+    http_status: int | None = Field(default=None, strict=True, ge=100, le=599, alias="httpStatus")
+    request_id: str | None = Field(default=None, strict=True, max_length=100, alias="requestId")
 
 
 class ErrorResponse(BaseModel):

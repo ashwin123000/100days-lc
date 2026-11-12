@@ -432,13 +432,14 @@ def post_client_error(
     system_logs.capture_error_from_request(
         source="FRONTEND",
         endpoint=payload.endpoint,
-        method="CLIENT",
-        status=0,
-        request_id=getattr(request.state, "request_id", ""),
+        method=payload.method or "CLIENT",
+        status=payload.http_status or 0,
+        request_id=payload.request_id or getattr(request.state, "request_id", ""),
         user_id=uid,
         error_code=payload.operation,
         message=payload.message,
         error=None,
+        stack_trace=payload.stack_trace,
     )
     return {"accepted": True}
 

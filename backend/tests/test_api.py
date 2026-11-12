@@ -133,6 +133,56 @@ def test_legacy_public_potd_write_endpoint_is_removed():
     assert response.status_code == 405
 
 
+def test_api_responses_include_request_id_for_production_diagnostics():
+    with TestClient(main.app) as client:
+        response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"]
+
+
+def test_leetcode_upstream_errors_are_labeled_separately_from_backend_errors(monkeypatch):
+    from backend.app.leetcode_service import LeetCodeUpstreamError
+
+    monkeypatch.setattr(main, "verify_id_token", lambda _token: {"uid": "learner-1"})
+    monkeypatch.setattr(
+        main,
+        "get_learner_record",
+        lambda _uid: {"role": "learner", "isActive": True, "leetcodeUsername": "sample_user"},
+    )
+    monkeypatch.setattr(main, "leetcode_request_limiter", main.LearnerRequestLimiter())
+    monkeypatch.setattr(
+        main.leetcode_service,
+        "get_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            LeetCodeUpstreamError("LeetCode GraphQL reported an error.")
+        ),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/leetcode/profile", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 502
+    assert response.headers["x-error-source"] == "leetcode_upstream"
+    assert response.headers["x-request-id"]
+
+
+def test_internal_service_errors_are_labeled_as_backend_errors(monkeypatch):
+    monkeypatch.setattr(main, "verify_id_token", lambda _token: {"uid": "admin-1", "admin": True})
+    monkeypatch.setattr(
+        main,
+        "registered_learner_count",
+        lambda: (_ for _ in ()).throw(main.FirebaseServiceError("Firestore unavailable.")),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/admin/learners/count", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 503
+    assert response.headers["x-error-source"] == "backend"
+    assert response.headers["x-request-id"]
+
+
 def test_learner_count_is_available_only_to_admin(monkeypatch):
     monkeypatch.setattr(main, "verify_id_token", lambda _token: {"uid": "admin-1", "admin": True})
     monkeypatch.setattr(main, "registered_learner_count", lambda: 23)

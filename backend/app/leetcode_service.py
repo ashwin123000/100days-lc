@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import re
 import threading
@@ -67,6 +68,8 @@ query recentAccepted($username: String!, $limit: Int!) {
   }
 }
 """
+logger = logging.getLogger(__name__)
+UPSTREAM_RETRY_DELAYS_SECONDS = (0.25,)
 
 
 class LeetCodeServiceError(RuntimeError):
@@ -170,6 +173,8 @@ def _normalize_linked_username(username: str) -> str:
 
 
 def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    operation_match = re.search(r"\bquery\s+([A-Za-z0-9_]+)", query)
+    operation = operation_match.group(1) if operation_match else "unknown"
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     request = Request(
         GRAPHQL_URL,
@@ -182,27 +187,66 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
         },
         method="POST",
     )
-    try:
-        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            if response.status != 200:
-                raise LeetCodeUpstreamError("LeetCode returned an unsuccessful response.")
-            payload = json.loads(response.read())
-    except HTTPError as error:
-        if error.code == 429:
-            raise LeetCodeUpstreamRateLimited("LeetCode is rate limiting profile requests.") from error
-        if error.code in {408, 504}:
+    for attempt in range(len(UPSTREAM_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                if response.status != 200:
+                    raise LeetCodeUpstreamError("LeetCode returned an unsuccessful response.")
+                payload = json.loads(response.read())
+            break
+        except HTTPError as error:
+            if error.code == 429:
+                logger.warning(
+                    "leetcode_graphql_transport_error operation=%s status=429 category=rate_limited",
+                    operation,
+                )
+                raise LeetCodeUpstreamRateLimited("LeetCode is rate limiting profile requests.") from error
+            if error.code in {408, 504}:
+                logger.warning(
+                    "leetcode_graphql_transport_error operation=%s status=%s category=timeout",
+                    operation,
+                    error.code,
+                )
+                raise LeetCodeUpstreamTimeout("LeetCode did not respond in time.") from error
+            if error.code in {502, 503} and attempt < len(UPSTREAM_RETRY_DELAYS_SECONDS):
+                time.sleep(UPSTREAM_RETRY_DELAYS_SECONDS[attempt])
+                continue
+            logger.warning(
+                "leetcode_graphql_transport_error operation=%s status=%s category=http_error",
+                operation,
+                error.code,
+            )
+            raise LeetCodeUpstreamError("LeetCode returned an unsuccessful response.") from error
+        except (TimeoutError, URLError) as error:
+            if isinstance(error, URLError) and not isinstance(error.reason, TimeoutError):
+                logger.warning(
+                    "leetcode_graphql_transport_error operation=%s category=connection",
+                    operation,
+                )
+                raise LeetCodeUpstreamError("LeetCode could not be reached.") from error
+            logger.warning(
+                "leetcode_graphql_transport_error operation=%s category=timeout",
+                operation,
+            )
             raise LeetCodeUpstreamTimeout("LeetCode did not respond in time.") from error
-        raise LeetCodeUpstreamError("LeetCode returned an unsuccessful response.") from error
-    except (TimeoutError, URLError) as error:
-        if isinstance(error, URLError) and not isinstance(error.reason, TimeoutError):
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            logger.warning(
+                "leetcode_graphql_response_error operation=%s category=malformed_json",
+                operation,
+            )
+            raise LeetCodeUpstreamError("LeetCode returned malformed JSON.") from error
+        except OSError as error:
+            logger.warning(
+                "leetcode_graphql_transport_error operation=%s category=connection",
+                operation,
+            )
             raise LeetCodeUpstreamError("LeetCode could not be reached.") from error
-        raise LeetCodeUpstreamTimeout("LeetCode did not respond in time.") from error
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise LeetCodeUpstreamError("LeetCode returned malformed JSON.") from error
-    except OSError as error:
-        raise LeetCodeUpstreamError("LeetCode could not be reached.") from error
 
     if not isinstance(payload, dict):
+        logger.warning(
+            "leetcode_graphql_response_error operation=%s category=invalid_payload",
+            operation,
+        )
         raise LeetCodeUpstreamError("LeetCode returned an invalid response.")
     errors = payload.get("errors")
     if errors:
@@ -212,8 +256,20 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
             if isinstance(error, dict) and isinstance(error.get("message"), str)
         ]
         if any("user does not exist" in message for message in messages):
+            category = "profile_not_found"
+            logger.warning(
+                "leetcode_graphql_response_error operation=%s category=%s",
+                operation,
+                category,
+            )
             raise LeetCodeProfileNotFound("The public LeetCode profile was not found.")
         if any("no permission to check the calendar" in message for message in messages):
+            category = "calendar_permission_denied"
+            logger.warning(
+                "leetcode_graphql_response_error operation=%s category=%s",
+                operation,
+                category,
+            )
             raise LeetCodeCalendarUnavailable(
                 "LeetCode does not permit public access to this submission calendar."
             )
@@ -232,10 +288,23 @@ def _graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
                 or "too many requests" in normalized_message
                 or "throttl" in normalized_message
             ):
+                logger.warning(
+                    "leetcode_graphql_response_error operation=%s category=rate_limited",
+                    operation,
+                )
                 raise LeetCodeUpstreamRateLimited("LeetCode is rate limiting profile requests.")
+        logger.warning(
+            "leetcode_graphql_response_error operation=%s category=graphql_errors count=%s",
+            operation,
+            len(errors) if isinstance(errors, list) else "invalid",
+        )
         raise LeetCodeUpstreamError("LeetCode GraphQL reported an error.")
     data = payload.get("data")
     if not isinstance(data, dict):
+        logger.warning(
+            "leetcode_graphql_response_error operation=%s category=missing_data",
+            operation,
+        )
         raise LeetCodeUpstreamError("LeetCode returned an invalid response.")
     return data
 

@@ -1,7 +1,10 @@
+import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -59,6 +62,7 @@ from .settings import Settings
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 settings = Settings.from_env()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -80,6 +84,41 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def log_api_failures(request: Request, call_next):
+    request_id = str(uuid4())
+    request.state.request_id = request_id
+    started_at = perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        route = request.scope.get("route")
+        logger.exception(
+            "api_request_exception request_id=%s method=%s route=%s",
+            request_id,
+            request.method,
+            getattr(route, "path", "unmatched"),
+        )
+        raise
+
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", "unmatched")
+    if response.status_code >= 500:
+        error_source = response.headers.get("X-Error-Source", "backend")
+        response.headers.setdefault("X-Error-Source", error_source)
+        logger.error(
+            "api_request_failure request_id=%s method=%s route=%s status=%s source=%s duration_ms=%.1f",
+            request_id,
+            request.method,
+            route_path,
+            response.status_code,
+            error_source,
+            (perf_counter() - started_at) * 1000,
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 catalog = ProblemCatalog(
     dataset_name=settings.dataset_name,
@@ -188,7 +227,10 @@ def _leetcode_response_error(error: LeetCodeServiceError) -> HTTPException:
     return HTTPException(
         status_code=error.status_code,
         detail={"code": error.code, "message": str(error)},
-        headers={"Retry-After": "60"} if error.status_code == 429 else None,
+        headers={
+            "X-Error-Source": "leetcode_upstream",
+            **({"Retry-After": "60"} if error.status_code == 429 else {}),
+        },
     )
 
 

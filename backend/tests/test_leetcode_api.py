@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -496,6 +497,29 @@ def test_graphql_nonexistent_profile_error_maps_to_profile_not_found(monkeypatch
         leetcode_service._graphql_request(PROFILE_QUERY, {"username": "missing_user"})
 
 
+def test_graphql_error_response_is_logged_without_username(monkeypatch, caplog):
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"errors":[{"message":"query failed"}],"data":null}'
+
+    monkeypatch.setattr(leetcode_service, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    with caplog.at_level(logging.WARNING, logger=leetcode_service.__name__):
+        with pytest.raises(LeetCodeUpstreamError):
+            leetcode_service._graphql_request(PROFILE_QUERY, {"username": "private_user"})
+
+    assert "leetcode_graphql_response_error operation=publicProfile category=graphql_errors" in caplog.text
+    assert "private_user" not in caplog.text
+
+
 def test_graphql_calendar_permission_error_maps_to_specific_upstream_error(monkeypatch):
     class FakeResponse:
         status = 200
@@ -778,6 +802,69 @@ def test_graphql_transport_handles_timeout_and_error_payload(monkeypatch):
     )
     with pytest.raises(LeetCodeUpstreamError, match="malformed JSON"):
         leetcode_service._graphql_request(PROFILE_QUERY, {"username": "sample_user"})
+
+
+def test_graphql_transport_retries_transient_gateway_failure(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"data":{"matchedUser":{"username":"sample_user"}}}'
+
+    responses = iter([
+        leetcode_service.HTTPError(
+            leetcode_service.GRAPHQL_URL,
+            502,
+            "Bad Gateway",
+            {},
+            None,
+        ),
+        FakeResponse(),
+    ])
+    calls = []
+
+    def fake_urlopen(*_args, **_kwargs):
+        calls.append(True)
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(leetcode_service, "urlopen", fake_urlopen)
+    monkeypatch.setattr(leetcode_service.time, "sleep", lambda _delay: None)
+
+    result = leetcode_service._graphql_request(PROFILE_QUERY, {"username": "sample_user"})
+
+    assert result == {"matchedUser": {"username": "sample_user"}}
+    assert len(calls) == 2
+
+
+def test_graphql_transport_stops_after_one_gateway_retry(monkeypatch):
+    calls = []
+
+    def fail_with_gateway_error(*_args, **_kwargs):
+        calls.append(True)
+        raise leetcode_service.HTTPError(
+            leetcode_service.GRAPHQL_URL,
+            502,
+            "Bad Gateway",
+            {},
+            None,
+        )
+
+    monkeypatch.setattr(leetcode_service, "urlopen", fail_with_gateway_error)
+    monkeypatch.setattr(leetcode_service.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(LeetCodeUpstreamError):
+        leetcode_service._graphql_request(PROFILE_QUERY, {"username": "sample_user"})
+
+    assert len(calls) == 2
 
 
 def test_limiter_blocks_after_configured_window_limit():

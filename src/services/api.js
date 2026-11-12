@@ -1,33 +1,56 @@
 async function requestJson(path, options = {}, idToken = '') {
   let response
+  const method = (options.method ?? 'GET').toUpperCase()
+  const request = () => fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      ...options.headers,
+    },
+  })
   try {
-    response = await fetch(path, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
-        ...options.headers,
-      },
-    })
+    response = await request()
+    if (method === 'GET' && [502, 503, 504].includes(response.status)) {
+      await response.body?.cancel()
+      await new Promise((resolve) => window.setTimeout(resolve, 250))
+      response = await request()
+    }
   } catch {
     throw new Error(
-      'Could not reach the FastAPI service. Start it on port 8011 or set API_PROXY_TARGET to its address.',
+      'Could not reach the API service. Check the connection and try again.',
     )
   }
 
   const body = await response.json().catch(() => null)
   if (!response.ok) {
     const detail = body?.detail
+    const requestId = response.headers.get('x-request-id')
+    const errorSource = response.headers.get('x-error-source')
+      ?? (response.status >= 500 ? 'gateway_or_backend' : null)
+    if (response.status >= 500) {
+      console.error('API request failed', {
+        method,
+        path,
+        status: response.status,
+        source: errorSource,
+        requestId,
+      })
+    }
     const error = new Error(
       typeof detail === 'string'
         ? detail
         : detail?.message ??
           (response.status === 404 && !body
             ? 'The /api route was not found. Check that Vite is proxying to the MLSC FastAPI service.'
+            : response.status === 502
+              ? `The API gateway returned HTTP 502${method === 'GET' ? ' after a retry' : ''}. The backend may be unavailable or unable to complete this request; try again shortly.${requestId ? ` Reference: ${requestId}.` : ''}`
             : `The problem data service could not complete this request (HTTP ${response.status}).`),
     )
     error.status = response.status
     error.code = detail?.code
+    error.requestId = requestId
+    error.source = errorSource
     throw error
   }
   if (!body) {

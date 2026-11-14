@@ -3,6 +3,7 @@ import { AuthProvider } from './contexts/AuthContext.jsx'
 import { useAuth } from './hooks/useAuth.js'
 import Navbar from './components/Navbar.jsx'
 import Hero from './components/Hero.jsx'
+import DsaAdventureMap from './sections/DsaAdventureMap.jsx'
 import ProblemActionDialog from './components/ProblemActionDialog.jsx'
 import AdminPotdDialog from './components/AdminPotdDialog.jsx'
 import ChallengePlatform from './sections/ChallengePlatform.jsx'
@@ -73,6 +74,9 @@ function routeFromLocation() {
   return {
     page,
     problemId: page === 'workspace' ? decodeURIComponent(parts.join('/')) : null,
+    topicId: page === 'problems' && parts[0] === 'topic'
+      ? decodeURIComponent(parts.slice(1).join('/'))
+      : null,
     authMode: page === 'auth' && parts[0] === 'admin' ? 'admin' : 'learner',
   }
 }
@@ -110,17 +114,24 @@ function AppContent() {
     setVerifiedChallengeSlugs(new Set())
   }, [auth.user?.uid])
 
-  const navigate = useCallback((page, problemId = null, replace = false, authMode = 'learner') => {
+  const navigate = useCallback((page, problemId = null, replace = false, authMode = 'learner', topicId = null) => {
     const suffix = page === 'workspace' && problemId != null
       ? `/${encodeURIComponent(problemId)}`
-      : page === 'auth' && authMode === 'admin' ? '/admin' : ''
+      : page === 'auth' && authMode === 'admin'
+        ? '/admin'
+        : page === 'problems' && topicId ? `/topic/${encodeURIComponent(topicId)}` : ''
     const hash = `#${page}${suffix}`
     window.history[replace ? 'replaceState' : 'pushState'](
       { ...(window.history.state ?? {}), mlscRoute: true },
       '',
       hash,
     )
-    setRoute({ page, problemId: page === 'workspace' ? String(problemId ?? '') : null, authMode })
+    setRoute({
+      page,
+      problemId: page === 'workspace' ? String(problemId ?? '') : null,
+      topicId: page === 'problems' ? topicId : null,
+      authMode,
+    })
     setActiveAction(null)
     setPotdDialogProblem(null)
     setPotdDialogOpen(false)
@@ -488,7 +499,28 @@ function AppContent() {
           <div className="account-check-state" role="status">Checking your account…</div>
         ) : (
           <>
-            {route.page === 'home' && <Hero onStartSolving={() => navigate(auth.user ? 'platform' : 'login')} />}
+            {route.page === 'home' && (
+              <>
+                <Hero onStartSolving={() => navigate(auth.user ? 'platform' : 'login')} />
+                <DsaAdventureMap
+                  user={auth.user}
+                  profile={auth.profile}
+                  isAdmin={auth.isAdmin}
+                  authLoading={auth.loading}
+                  problems={problems}
+                  problemsLoaded={problemsLoaded}
+                  onContinue={() => navigate(auth.user ? 'platform' : 'login')}
+                  onSelectTopic={(topicId) => {
+                    if (!auth.user || !auth.profile || auth.isAdmin) {
+                      navigate('login')
+                      return
+                    }
+                    navigate('problems', null, false, 'learner', topicId)
+                  }}
+                  onOpenLeaderboard={() => navigate(auth.user && !auth.isAdmin ? 'leaderboard' : 'login')}
+                />
+              </>
+            )}
             {route.page === 'login' && (
           <LoginPage
             onBack={() => navigateBack('home')}
@@ -521,6 +553,7 @@ function AppContent() {
           <ProblemExplorer
             problems={problems}
             potd={potd}
+            topicId={route.topicId}
             loading={!problemsLoaded}
             onBack={() => navigateBack('platform')}
             onOpenPotd={() => potd && openWorkspace(potd)}

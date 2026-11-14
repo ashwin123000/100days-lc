@@ -2,25 +2,14 @@ import { useMemo, useState } from 'react'
 import { ArrowDownUp, ArrowLeft, Search } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import ProblemTable from '../components/ProblemTable.jsx'
+import { ADVENTURE_TOPICS, problemMatchesAdventureTopic } from '../data/adventureTopics.js'
+import { wasPublishedForCurrentSet } from '../utils/problemData.js'
 import PotdFeature from './PotdFeature.jsx'
-
-// Learner library reset marker. Older Firestore records stay intact and become
-// visible again only when republished, which updates their existing updatedAt.
-const PRACTICE_LIBRARY_RESET_AT = Date.parse('2026-11-10T12:15:25Z')
-
-function wasPublishedForCurrentSet(problem) {
-  const updatedAt = problem?.updatedAt
-  const timestamp = typeof updatedAt?.toMillis === 'function'
-    ? updatedAt.toMillis()
-    : typeof updatedAt === 'string' || updatedAt instanceof Date
-      ? new Date(updatedAt).getTime()
-      : 0
-  return Number.isFinite(timestamp) && timestamp >= PRACTICE_LIBRARY_RESET_AT
-}
 
 function ProblemExplorer({
   problems,
   potd,
+  topicId,
   onBack,
   onOpenPotd,
   onAction,
@@ -34,6 +23,7 @@ function ProblemExplorer({
   const [solvedFilter, setSolvedFilter] = useState('All problems')
   const [sort, setSort] = useState('number-asc')
   const shouldReduceMotion = useReducedMotion()
+  const selectedTopic = ADVENTURE_TOPICS.find((topic) => topic.id === topicId)
   const currentSetProblems = useMemo(() => problems.filter(wasPublishedForCurrentSet), [problems])
   const currentSetPotd = wasPublishedForCurrentSet(potd) ? potd : null
 
@@ -46,6 +36,7 @@ function ProblemExplorer({
           problem.title.toLowerCase().includes(query) ||
           String(problem.id).includes(query) ||
           problem.topics.some((topic) => topic.toLowerCase().includes(query))
+        const matchesTopic = !topicId || problemMatchesAdventureTopic(problem, topicId)
         const matchesDifficulty =
           difficulty === 'All difficulties' || problem.difficulty === difficulty
         const isSolved = problem.status === 'Solved'
@@ -53,7 +44,7 @@ function ProblemExplorer({
           solvedFilter === 'All problems' ||
           (solvedFilter === 'Solved' && isSolved) ||
           (solvedFilter === 'Unsolved' && !isSolved)
-        return matchesSearch && matchesDifficulty && matchesSolved
+        return matchesSearch && matchesTopic && matchesDifficulty && matchesSolved
       })
       .sort((first, second) => {
         if (sort === 'number-desc') return second.id - first.id
@@ -61,7 +52,7 @@ function ProblemExplorer({
         if (sort === 'acceptance-desc') return second.acceptance - first.acceptance
         return first.id - second.id
       })
-  }, [currentSetProblems, difficulty, search, solvedFilter, sort])
+  }, [currentSetProblems, difficulty, search, solvedFilter, sort, topicId])
 
   const solvedCount = currentSetProblems.filter((problem) => problem.status === 'Solved').length
 
@@ -88,9 +79,13 @@ function ProblemExplorer({
 
       <div className="problem-heading">
         <div>
-          <p className="section-kicker">MLSC PRACTICE LIBRARY</p>
-          <h1 id="problem-title">Revisit Problems</h1>
-          <p>Pick up where you left off, revisit a concept, or save a problem for later.</p>
+          <p className="section-kicker">{selectedTopic ? 'DSA ADVENTURE MAP' : 'MLSC PRACTICE LIBRARY'}</p>
+          <h1 id="problem-title">{selectedTopic?.label ?? 'Revisit Problems'}</h1>
+          <p>
+            {selectedTopic
+              ? `Explore published ${selectedTopic.label} problems and keep building your skills.`
+              : 'Pick up where you left off, revisit a concept, or save a problem for later.'}
+          </p>
         </div>
       </div>
 

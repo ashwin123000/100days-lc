@@ -1,0 +1,619 @@
+.adventure-map-section {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100vw;
+  padding: 88px 32px 74px;
+  border-top: 1px solid rgb(122 153 197 / 9%);
+  background:
+    radial-gradient(ellipse at 48% 36%, rgb(16 49 72 / 28%), transparent 58%),
+    linear-gradient(180deg, #091126 0%, #09152a 54%, #081326 100%);
+}
+
+.adventure-map-section::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-image: radial-gradient(circle, rgb(142 165 202 / 21%) 1px, transparent 1.4px);
+  background-position: center top;
+  background-size: 24px 24px;
+  content: "";
+  mask-image: linear-gradient(180deg, transparent, #000 12%, #000 74%, transparent);
+  opacity: 0.34;
+  pointer-events: none;
+}
+
+.adventure-map-inner {
+  width: min(100%, 1440px);
+  margin-inline: auto;
+}
+
+.adventure-map-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 42px;
+}
+
+.adventure-map-intro {
+  min-width: 0;
+}
+
+.adventure-map-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 17px;
+  color: #22d3bd;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.2em;
+}
+
+.adventure-map-eyebrow::after {
+  width: 62px;
+  height: 1px;
+  background: linear-gradient(90deg, #18c8b3, transparent);
+  content: "";
+}
+
+.adventure-map-intro h2 {
+  margin: 0;
+  color: #f2f5fb;
+  font-size: clamp(32px, 4vw, 48px);
+  font-weight: 650;
+  letter-spacing: -0.055em;
+  line-height: 1.08;
+}
+
+.adventure-map-intro h2 span {
+  color: #1dd2bd;
+}
+
+.adventure-map-subtitle {
+  margin: 13px 0 0;
+  color: #a7b3c7;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.adventure-stats-wrap {
+  width: min(100%, 590px);
+}
+
+.adventure-stats {
+  display: flex;
+  min-height: 72px;
+  align-items: stretch;
+  border: 1px solid rgb(108 146 192 / 34%);
+  border-radius: 999px;
+  background: rgb(9 20 40 / 72%);
+  box-shadow: 0 10px 28px rgb(1 7 19 / 20%), inset 0 0 20px rgb(86 132 191 / 4%);
+}
+
+.adventure-stat {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 11px 15px;
+  color: #eef4fd;
+  text-align: left;
+}
+
+.adventure-stat + .adventure-stat {
+  border-left: 1px solid rgb(108 146 192 / 24%);
+}
+
+.adventure-stat-button {
+  border: 0;
+  border-left: 1px solid rgb(108 146 192 / 24%);
+  border-radius: 0 999px 999px 0;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.adventure-stat-button:hover,
+.adventure-stat-button:focus-visible {
+  background: rgb(24 200 179 / 8%);
+}
+
+.adventure-stat-button:focus-visible {
+  outline: 2px solid #61e7d8;
+  outline-offset: -4px;
+}
+
+.adventure-stat-icon {
+  flex: 0 0 auto;
+  color: #27d6c3;
+}
+
+.adventure-stat-streak .adventure-stat-icon {
+  color: #ff955d;
+}
+
+.adventure-stat-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.adventure-stat-label {
+  color: #8798b0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.adventure-stat-value {
+  overflow: hidden;
+  color: #f3f6fc;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adventure-stat-detail {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.adventure-stats-note {
+  min-height: 16px;
+  margin: 8px 14px 0;
+  color: #71819a;
+  font-size: 10px;
+  text-align: right;
+}
+
+.adventure-stats-note button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4de0cf;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.adventure-map-visual {
+  position: relative;
+  margin-top: 8px;
+}
+
+.adventure-map-desktop {
+  position: relative;
+  height: clamp(470px, 44vw, 590px);
+  min-height: 470px;
+}
+
+.adventure-roadmap-svg {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.adventure-roadmap-future {
+  fill: none;
+  stroke: rgb(116 145 185 / 54%);
+  stroke-dasharray: 4 11;
+  stroke-linecap: round;
+  stroke-width: 2.2;
+}
+
+.adventure-roadmap-progress {
+  fill: none;
+  filter: drop-shadow(0 0 5px rgb(24 211 192 / 60%));
+  opacity: 0;
+  stroke: #22d7c3;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  stroke-linecap: round;
+  stroke-width: 4;
+  transition: stroke-dashoffset 1.5s cubic-bezier(0.2, 0.75, 0.25, 1), opacity 300ms ease;
+}
+
+.adventure-roadmap-progress.is-visible {
+  opacity: 1;
+  stroke-dashoffset: var(--roadmap-offset);
+}
+
+.adventure-roadmap-particle {
+  fill: #a1fff1;
+  filter: drop-shadow(0 0 5px #18c8b3);
+}
+
+.adventure-milestones,
+.adventure-milestones-mobile {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adventure-milestone {
+  position: absolute;
+  top: var(--node-y);
+  left: var(--node-x);
+  width: 190px;
+  transform: translate(-50%, -50%);
+}
+
+.adventure-milestone-button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: transform 180ms ease;
+}
+
+.adventure-milestone-button:not(:disabled):hover {
+  transform: translateY(-4px) scale(1.025);
+}
+
+.adventure-milestone-button:focus-visible {
+  outline: 2px solid #61e7d8;
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+
+.adventure-milestone-button:disabled {
+  cursor: not-allowed;
+}
+
+.adventure-milestone-marker {
+  position: relative;
+  display: grid;
+  width: 62px;
+  height: 62px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 2px solid rgb(123 151 190 / 63%);
+  border-radius: 50%;
+  background: #101e36;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 22%), inset 0 0 0 5px rgb(255 255 255 / 2%);
+  color: #aab9cf;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
+}
+
+.adventure-milestone--active .adventure-milestone-marker,
+.adventure-milestone--completed .adventure-milestone-marker {
+  border-color: #19d5c1;
+  background: #0c303a;
+  box-shadow:
+    0 0 0 5px rgb(24 200 179 / 7%),
+    0 0 26px rgb(24 200 179 / 22%),
+    inset 0 0 14px rgb(24 200 179 / 10%);
+  color: #32e3cf;
+}
+
+.adventure-milestone--locked .adventure-milestone-marker {
+  border-color: rgb(111 132 162 / 40%);
+  background: rgb(13 25 45 / 86%);
+  box-shadow: none;
+  color: #77869d;
+}
+
+.adventure-milestone-check {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  box-sizing: content-box;
+  padding: 3px;
+  border: 1px solid #081526;
+  border-radius: 50%;
+  background: #1bd3bd;
+  color: #061822;
+}
+
+.adventure-milestone-name {
+  margin-top: 10px;
+  color: #dce5f2;
+  font-size: 13px;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.adventure-milestone--active .adventure-milestone-name,
+.adventure-milestone--completed .adventure-milestone-name {
+  color: #f4fbff;
+}
+
+.adventure-milestone--locked .adventure-milestone-name {
+  color: #8290a6;
+}
+
+.adventure-milestone-count {
+  max-width: 178px;
+  margin-top: 4px;
+  color: #8595ad;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.adventure-milestone--active .adventure-milestone-count {
+  color: #a7c7d0;
+}
+
+.adventure-milestone--locked .adventure-milestone-count {
+  color: #65758d;
+}
+
+.adventure-map-waves {
+  position: absolute;
+  z-index: 0;
+  right: -32px;
+  bottom: -6px;
+  left: -32px;
+  width: calc(100% + 64px);
+  height: 140px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.adventure-map-waves path {
+  fill: none;
+  stroke: rgb(16 155 174 / 19%);
+  stroke-width: 1.4;
+}
+
+.adventure-map-waves path + path {
+  stroke: rgb(31 101 146 / 17%);
+  stroke-width: 1;
+}
+
+.adventure-map-mobile {
+  display: none;
+}
+
+.adventure-map-empty {
+  margin: 0 auto;
+  color: #8291a8;
+  font-size: 13px;
+  text-align: center;
+}
+
+.adventure-map-cta {
+  display: grid;
+  grid-template-columns: minmax(30px, 1fr) auto minmax(30px, 1fr);
+  align-items: center;
+  gap: 32px;
+  width: min(100%, 1120px);
+  margin: 12px auto 0;
+}
+
+.adventure-map-cta > span {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(24 200 179 / 42%));
+}
+
+.adventure-map-cta > span:last-child {
+  background: linear-gradient(90deg, rgb(24 200 179 / 42%), transparent);
+}
+
+.adventure-continue-button {
+  display: inline-flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 27px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(110deg, #19d6c0, #39e5cc);
+  box-shadow: 0 8px 22px rgb(17 211 190 / 18%);
+  color: #061a24;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.adventure-continue-button:hover {
+  box-shadow: 0 12px 30px rgb(17 211 190 / 28%);
+  filter: saturate(1.08);
+  transform: translateY(-2px);
+}
+
+.adventure-continue-button:focus-visible {
+  outline: 2px solid #a1fff1;
+  outline-offset: 4px;
+}
+
+@media (max-width: 1050px) {
+  .adventure-map-section {
+    padding-inline: 24px;
+  }
+
+  .adventure-map-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 26px;
+  }
+
+  .adventure-stats-wrap {
+    width: min(100%, 620px);
+  }
+
+  .adventure-stats-note {
+    text-align: left;
+  }
+
+  .adventure-map-visual {
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .adventure-map-section {
+    padding: 64px 18px 58px;
+  }
+
+  .adventure-map-header {
+    gap: 22px;
+  }
+
+  .adventure-map-eyebrow {
+    margin-bottom: 13px;
+    font-size: 10px;
+  }
+
+  .adventure-map-intro h2 {
+    font-size: clamp(30px, 8vw, 40px);
+  }
+
+  .adventure-map-subtitle {
+    margin-top: 10px;
+    font-size: 13px;
+  }
+
+  .adventure-stats {
+    min-height: 64px;
+  }
+
+  .adventure-stat {
+    gap: 7px;
+    padding: 9px 8px;
+  }
+
+  .adventure-stat-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .adventure-stat-label {
+    font-size: 8px;
+    letter-spacing: 0.06em;
+  }
+
+  .adventure-stat-value {
+    font-size: 12px;
+  }
+
+  .adventure-stats-note {
+    margin-inline: 8px;
+    font-size: 9px;
+  }
+
+  .adventure-map-desktop {
+    display: none;
+  }
+
+  .adventure-map-mobile {
+    position: relative;
+    display: block;
+    height: 1400px;
+    width: calc(100% + 36px);
+    margin: 12px -18px 0;
+  }
+
+  .adventure-roadmap-svg-mobile {
+    position: absolute;
+    inset: 0;
+  }
+
+  .adventure-milestone-mobile {
+    top: var(--mobile-y);
+    left: var(--mobile-x);
+    width: min(44vw, 174px);
+    transform: translate(-50%, -50%);
+  }
+
+  .adventure-milestone-mobile .adventure-milestone-marker {
+    width: 54px;
+    height: 54px;
+  }
+
+  .adventure-milestone-mobile .adventure-milestone-name {
+    margin-top: 8px;
+    font-size: 12px;
+  }
+
+  .adventure-milestone-mobile .adventure-milestone-count {
+    font-size: 10px;
+  }
+
+  .adventure-map-cta {
+    gap: 13px;
+    margin-top: 10px;
+  }
+
+  .adventure-continue-button {
+    min-height: 50px;
+    gap: 9px;
+    padding-inline: 18px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 380px) {
+  .adventure-map-section {
+    padding-inline: 14px;
+  }
+
+  .adventure-stats {
+    min-height: 60px;
+  }
+
+  .adventure-stat {
+    gap: 5px;
+    padding-inline: 5px;
+  }
+
+  .adventure-stat-icon {
+    width: 13px;
+    height: 13px;
+  }
+
+  .adventure-stat-value {
+    font-size: 11px;
+  }
+
+  .adventure-map-mobile {
+    width: calc(100% + 28px);
+    margin-inline: -14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adventure-milestone-button,
+  .adventure-milestone-marker,
+  .adventure-roadmap-progress,
+  .adventure-continue-button {
+    transition: none;
+  }
+
+  .adventure-roadmap-particle {
+    display: none;
+  }
+}

@@ -51,7 +51,7 @@ function Hero({ onStartSolving }) {
 
         <motion.div className="hero-action" {...entrance(0.5)}>
           <Button onClick={onStartSolving}>
-            Start Solving – 100 Days of LeetCode
+            Sign Up / Log In to Start Solving
           </Button>
         </motion.div>
       </div>

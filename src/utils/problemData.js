@@ -1,3 +1,15 @@
+const PRACTICE_LIBRARY_RESET_AT = Date.parse('2026-11-10T12:15:25Z')
+
+export function wasPublishedForCurrentSet(problem) {
+  const updatedAt = problem?.updatedAt
+  const timestamp = typeof updatedAt?.toMillis === 'function'
+    ? updatedAt.toMillis()
+    : typeof updatedAt === 'string' || updatedAt instanceof Date
+      ? new Date(updatedAt).getTime()
+      : 0
+  return Number.isFinite(timestamp) && timestamp >= PRACTICE_LIBRARY_RESET_AT
+}
+
 function tagName(tag) {
   if (typeof tag === 'string') return tag
   return tag?.name ?? tag?.slug ?? ''

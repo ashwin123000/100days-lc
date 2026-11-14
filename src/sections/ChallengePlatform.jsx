@@ -1,6 +1,18 @@
 import { ArrowLeft, ArrowRight, BookOpenCheck, CalendarCheck2, Code2, Flame, Layers3 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 
+const topicPills = [
+  { label: 'Arrays & Hashing', tone: 'mint', emoji: '🗃️' },
+  { label: 'Strings & Windows', tone: 'cyan', emoji: '✦' },
+  { label: 'Stack & Queue', tone: 'purple', emoji: '🧠' },
+  { label: 'Lists & Search', tone: 'lavender', emoji: '📋' },
+  { label: 'Trees', tone: 'green', emoji: '🌳' },
+  { label: 'Graphs', tone: 'pink', emoji: '📈' },
+  { label: 'Dynamic Programming', tone: 'gold', emoji: '⚡' },
+  { label: 'Greedy & Backtracking', tone: 'amber', emoji: '🎯' },
+  { label: 'Heap & Design', tone: 'teal', emoji: '🏗️' },
+]
+
 function ChallengePlatform({ onBack, onSelectDaily, onSelectRevisit }) {
   const shouldReduceMotion = useReducedMotion()
   const cardMotion = shouldReduceMotion
@@ -29,6 +41,15 @@ function ChallengePlatform({ onBack, onSelectDaily, onSelectRevisit }) {
         <p className="section-kicker">100 DAYS OF LEETCODE</p>
         <h1 id="challenge-title">Your next problem starts here.</h1>
         <p>One thoughtful solve at a time. Choose how you want to practice today.</p>
+      </div>
+
+      <div className="challenge-topic-cloud" aria-label="Problem categories">
+        {topicPills.map((pill) => (
+          <span key={pill.label} className={`challenge-topic-pill challenge-topic-pill--${pill.tone}`}>
+            <span aria-hidden="true" className="challenge-topic-emoji">{pill.emoji}</span>
+            {pill.label}
+          </span>
+        ))}
       </div>
 
       <div className="platform-grid">
